@@ -14,6 +14,16 @@ export function createGameMaster({ store, queue, bus, getAdapter }) {
   let history = [];
   let lastRejections = [];
   let busy = false;
+  let activeAbort = null;
+
+  function cancel() {
+    if (busy && activeAbort) {
+      activeAbort.abort('canceled');
+      activeAbort = null;
+    }
+  }
+
+  bus?.on('gm:cancel', () => cancel());
 
   async function handlePlayerInput(action) {
     const text = action.trim();
@@ -21,15 +31,22 @@ export function createGameMaster({ store, queue, bus, getAdapter }) {
     if (store.get().status !== 'playing') return { status: 'game_over' };
 
     busy = true;
-    bus?.emit('player:input', { text });
-    bus?.emit('gm:thinking', true);
+    activeAbort = new AbortController();
+    const signal = activeAbort.signal;
     const adapter = getAdapter();
+
+    bus?.emit('player:input', { text });
+    bus?.emit('gm:thinking', {
+      busy: true,
+      model: adapter.getModel ? adapter.getModel() : adapter.name,
+      timeoutSeconds: adapter.getTimeoutSeconds ? adapter.getTimeoutSeconds() : 60,
+    });
 
     try {
       const request = buildRequest({ state: store.get(), history, action: text, rejections: lastRejections });
       let attempt = 1;
       bus?.emit('llm:request', { adapter: adapter.name, attempt, request });
-      let reply = await adapter.send(request);
+      let reply = await adapter.send(request, { signal });
       bus?.emit('llm:response', { adapter: adapter.name, attempt, ...reply });
       let parsed = parseLLMResponse(reply.text);
       let repaired = false;
@@ -40,7 +57,7 @@ export function createGameMaster({ store, queue, bus, getAdapter }) {
         attempt = 2;
         const repairReq = buildRepairRequest(request, reply.text, errors);
         bus?.emit('llm:request', { adapter: adapter.name, attempt, request: repairReq });
-        reply = await adapter.send(repairReq);
+        reply = await adapter.send(repairReq, { signal });
         bus?.emit('llm:response', { adapter: adapter.name, attempt, ...reply });
         const second = parseLLMResponse(reply.text);
         if (second.ok) {
@@ -66,22 +83,29 @@ export function createGameMaster({ store, queue, bus, getAdapter }) {
       bus?.emit('llm:turn', { applied: result.applied.length, rejected: result.rejected.length, repaired });
       return { status: 'ok', result, repaired };
     } catch (err) {
+      if (err.kind === 'canceled') {
+        bus?.emit('narrative', { text: '[Cancelado] A requisicao ao Mestre foi interrompida.', source: 'system' });
+        return { status: 'canceled' };
+      }
       bus?.emit('llm:error', { message: err.message, kind: err.kind ?? 'unknown' });
       bus?.emit('narrative', { text: `[Erro] ${err.message}`, source: 'system' });
       return { status: 'error', error: err };
     } finally {
       busy = false;
-      bus?.emit('gm:thinking', false);
+      activeAbort = null;
+      bus?.emit('gm:thinking', { busy: false });
     }
   }
 
   function reset() {
+    cancel();
     history = [];
     lastRejections = [];
   }
 
   return {
     handlePlayerInput,
+    cancel,
     reset,
     get busy() {
       return busy;

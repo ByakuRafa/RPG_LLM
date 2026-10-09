@@ -7,7 +7,7 @@ import { manhattan } from '../engine/rules.js';
 
 export const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 export const DEFAULT_MODEL = 'gemini-3.8-flash';
-export const REQUEST_TIMEOUT_MS = 30000;
+export const REQUEST_TIMEOUT_MS = 90000; // 90 seconds default (up from 30s)
 
 export class LLMError extends Error {
   constructor(message, { status = null, kind = 'unknown' } = {}) {
@@ -28,7 +28,7 @@ function buildGeminiBody(request, settings, { minimal = false, noMime = false } 
   const isGemma = /gemma/i.test(settings.model || '');
   const generationConfig = {
     temperature: settings.temperature ?? 0.7,
-    maxOutputTokens: 2048,
+    maxOutputTokens: isGemma ? 512 : 1024, // Limiting output tokens speeds up generation significantly
   };
   if (!noMime && !isGemma) {
     generationConfig.responseMimeType = 'application/json';
@@ -45,9 +45,20 @@ function buildGeminiBody(request, settings, { minimal = false, noMime = false } 
   };
 }
 
-async function postJson(url, body, apiKey, fetchImpl) {
+async function postJson(url, body, apiKey, fetchImpl, timeoutMs = REQUEST_TIMEOUT_MS, externalSignal = null) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort('timeout'), timeoutMs);
+  let abortListener = null;
+
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      clearTimeout(timer);
+      throw new LLMError('Requisicao cancelada antes de iniciar.', { kind: 'canceled' });
+    }
+    abortListener = () => controller.abort('canceled');
+    externalSignal.addEventListener('abort', abortListener, { once: true });
+  }
+
   try {
     const res = await fetchImpl(url, {
       method: 'POST',
@@ -63,59 +74,81 @@ async function postJson(url, body, apiKey, fetchImpl) {
     }
     return { res, data };
   } catch (err) {
-    if (err.name === 'AbortError') throw new LLMError(`Tempo esgotado após ${REQUEST_TIMEOUT_MS / 1000}s`, { kind: 'timeout' });
+    if (controller.signal.aborted) {
+      if (externalSignal?.aborted || controller.signal.reason === 'canceled') {
+        throw new LLMError('Requisicao cancelada pelo jogador.', { kind: 'canceled' });
+      }
+      const secs = Math.round(timeoutMs / 1000);
+      throw new LLMError(
+        `Tempo limite esgotado apos ${secs}s. O modelo esta demorando no Google AI Studio. Aumente o Tempo Limite nas Configuracoes (ex: 180s) ou use 'gemini-3.8-flash' para respostas rapidas.`,
+        { kind: 'timeout' }
+      );
+    }
     throw new LLMError(`Falha de rede: ${err.message}`, { kind: 'network' });
   } finally {
     clearTimeout(timer);
+    if (externalSignal && abortListener) {
+      externalSignal.removeEventListener('abort', abortListener);
+    }
   }
 }
 
 function mapHttpError(status, data) {
   const apiMsg = data?.error?.message ?? '';
-  if (status === 400) return new LLMError(`Requisição inválida (400): ${apiMsg}`, { status, kind: 'bad_request' });
-  if (status === 401 || status === 403) return new LLMError(`Chave de API inválida ou sem permissão (${status}). ${apiMsg}`, { status, kind: 'auth' });
-  if (status === 404) return new LLMError(`Modelo não encontrado (404). Verifique o nome do modelo. ${apiMsg}`, { status, kind: 'model' });
-  if (status === 429) return new LLMError(`Limite de requisições atingido (429). Aguarde e tente novamente. ${apiMsg}`, { status, kind: 'rate_limit' });
+  if (status === 400) return new LLMError(`Requisicao invalida (400): ${apiMsg}`, { status, kind: 'bad_request' });
+  if (status === 401 || status === 403) return new LLMError(`Chave de API invalida ou sem permissao (${status}). ${apiMsg}`, { status, kind: 'auth' });
+  if (status === 404) return new LLMError(`Modelo nao encontrado (404). Verifique o nome do modelo. ${apiMsg}`, { status, kind: 'model' });
+  if (status === 429) return new LLMError(`Limite de requisicoes atingido (429). Aguarde e tente novamente. ${apiMsg}`, { status, kind: 'rate_limit' });
   if (status >= 500) return new LLMError(`Erro no servidor do Gemini (${status}). ${apiMsg}`, { status, kind: 'server' });
   return new LLMError(`Erro HTTP ${status}. ${apiMsg}`, { status, kind: 'http' });
 }
 
 function extractText(data) {
   if (data?.promptFeedback?.blockReason) {
-    throw new LLMError(`Prompt bloqueado pelo filtro de segurança: ${data.promptFeedback.blockReason}`, { kind: 'blocked' });
+    throw new LLMError(`Prompt bloqueado pelo filtro de seguranca: ${data.promptFeedback.blockReason}`, { kind: 'blocked' });
   }
   const cand = data?.candidates?.[0];
   if (!cand) throw new LLMError('Resposta sem candidatos', { kind: 'empty' });
   const text = (cand.content?.parts ?? []).filter((p) => !p.thought).map((p) => p.text ?? '').join('');
   if (!text && cand.finishReason && cand.finishReason !== 'STOP') {
-    throw new LLMError(`Geração interrompida: ${cand.finishReason}`, { kind: 'finish' });
+    throw new LLMError(`Geracao interrompida: ${cand.finishReason}`, { kind: 'finish' });
   }
   return text;
 }
 
 /**
  * Google Gemini (AI Studio) REST adapter. Called directly from the browser.
- * On HTTP 400 it retries once with a minimal config (no responseSchema /
- * thinkingConfig) to stay compatible with models that reject those fields.
+ * Supports configurable timeout (120-180s for Gemma) and multi-stage fallback.
  */
 export function createGeminiAdapter({ getSettings, fetchImpl = (...a) => fetch(...a) }) {
   return {
     name: 'gemini',
-    async send(request) {
+    getModel() {
+      return getSettings().model || DEFAULT_MODEL;
+    },
+    getTimeoutSeconds() {
+      const settings = getSettings();
+      const isGemma = /gemma/i.test(settings.model || '');
+      return settings.timeoutSeconds ? Number(settings.timeoutSeconds) : (isGemma ? 120 : 60);
+    },
+    async send(request, { signal = null } = {}) {
       const settings = getSettings();
       if (!settings.apiKey) throw new LLMError('Configure sua chave de API do Google AI Studio em Configuracoes.', { kind: 'auth' });
       const model = settings.model || DEFAULT_MODEL;
+      const isGemma = /gemma/i.test(model);
+      const defaultTimeoutMs = isGemma ? 120000 : 60000;
+      const timeoutMs = settings.timeoutSeconds ? Number(settings.timeoutSeconds) * 1000 : defaultTimeoutMs;
       const url = `${GEMINI_BASE}/models/${encodeURIComponent(model)}:generateContent`;
       const t0 = performance.now();
 
-      let { res, data } = await postJson(url, buildGeminiBody(request, { ...settings, model }), settings.apiKey, fetchImpl);
+      let { res, data } = await postJson(url, buildGeminiBody(request, { ...settings, model }), settings.apiKey, fetchImpl, timeoutMs, signal);
       let degraded = false;
-      if (res.status === 400) {
-        ({ res, data } = await postJson(url, buildGeminiBody(request, { ...settings, model }, { minimal: true }), settings.apiKey, fetchImpl));
+      if (res.status === 400 && !isGemma) {
+        ({ res, data } = await postJson(url, buildGeminiBody(request, { ...settings, model }, { minimal: true }), settings.apiKey, fetchImpl, timeoutMs, signal));
         degraded = true;
       }
       if (res.status === 400) {
-        ({ res, data } = await postJson(url, buildGeminiBody(request, { ...settings, model }, { minimal: true, noMime: true }), settings.apiKey, fetchImpl));
+        ({ res, data } = await postJson(url, buildGeminiBody(request, { ...settings, model }, { minimal: true, noMime: true }), settings.apiKey, fetchImpl, timeoutMs, signal));
         degraded = true;
       }
       if (!res.ok) throw mapHttpError(res.status, data);

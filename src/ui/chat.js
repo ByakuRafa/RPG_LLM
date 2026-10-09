@@ -2,7 +2,7 @@
  * Chat component: Narrative feed, player input, action suggestions,
  * GM thinking state and input history.
  */
-export function createChat({ container, bus, onSendAction }) {
+export function createChat({ container, bus, onSendAction, onCancelAction }) {
   container.innerHTML = `
     <div class="chat-header">
       <div class="chat-title-group">
@@ -33,7 +33,11 @@ export function createChat({ container, bus, onSendAction }) {
         <button type="submit" id="chat-send-btn" class="chat-send-btn">Enviar</button>
       </form>
       <div class="chat-thinking-badge" id="chat-thinking-badge" style="display: none;">
-        <span class="spinner"></span> O Mestre esta pensando...
+        <div class="chat-thinking-content">
+          <span class="spinner"></span>
+          <span id="chat-thinking-text">O Mestre esta pensando... (0s)</span>
+        </div>
+        <button type="button" id="chat-cancel-btn" class="chat-thinking-cancel-btn" title="Cancelar espera">Cancelar</button>
       </div>
     </div>
   `;
@@ -43,8 +47,14 @@ export function createChat({ container, bus, onSendAction }) {
   const inputEl = container.querySelector('#chat-input');
   const sendBtn = container.querySelector('#chat-send-btn');
   const thinkingEl = container.querySelector('#chat-thinking-badge');
+  const thinkingTextEl = container.querySelector('#chat-thinking-text');
+  const cancelBtn = container.querySelector('#chat-cancel-btn');
   const suggestionsEl = container.querySelector('#chat-suggestions');
   const clearBtn = container.querySelector('#chat-clear-btn');
+
+  let thinkingTimer = null;
+  let thinkingSeconds = 0;
+  let thinkingModel = '';
 
   const history = [];
   let historyIdx = -1;
@@ -78,13 +88,47 @@ export function createChat({ container, bus, onSendAction }) {
       .replace(/"/g, '&quot;');
   }
 
-  function setBusy(busy) {
+  function updateThinkingText() {
+    if (!thinkingTextEl) return;
+    const isGemma = /gemma/i.test(thinkingModel);
+    let note = '';
+    if (thinkingSeconds >= 45 && isGemma) {
+      note = ' - Gemma 4 pode levar ate 90s no Google AI Studio...';
+    } else if (thinkingSeconds >= 20) {
+      note = ' - aguardando geracao...';
+    }
+    thinkingTextEl.textContent = `O Mestre esta pensando... (${thinkingSeconds}s${note})`;
+  }
+
+  function setBusy(busy, meta = {}) {
     inputEl.disabled = busy;
     sendBtn.disabled = busy;
-    thinkingEl.style.display = busy ? 'flex' : 'none';
     suggestionsEl.querySelectorAll('.chip-btn').forEach((b) => (b.disabled = busy));
-    if (!busy) inputEl.focus();
+
+    if (thinkingTimer) {
+      clearInterval(thinkingTimer);
+      thinkingTimer = null;
+    }
+
+    if (busy) {
+      thinkingSeconds = 0;
+      thinkingModel = meta?.model || '';
+      updateThinkingText();
+      thinkingEl.style.display = 'flex';
+      thinkingTimer = setInterval(() => {
+        thinkingSeconds++;
+        updateThinkingText();
+      }, 1000);
+    } else {
+      thinkingEl.style.display = 'none';
+      inputEl.focus();
+    }
   }
+
+  cancelBtn.addEventListener('click', () => {
+    bus.emit('gm:cancel');
+    onCancelAction?.();
+  });
 
   formEl.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -131,8 +175,12 @@ export function createChat({ container, bus, onSendAction }) {
     appendEntry({ text, type: 'narrative', source });
   });
 
-  bus.on('gm:thinking', (busy) => {
-    setBusy(busy);
+  bus.on('gm:thinking', (arg) => {
+    if (typeof arg === 'boolean') {
+      setBusy(arg);
+    } else {
+      setBusy(Boolean(arg?.busy), arg);
+    }
   });
 
   bus.on('game:over', ({ status }) => {

@@ -11,6 +11,7 @@ export const DEFAULT_SETTINGS = {
   apiKey: '',
   model: DEFAULT_MODEL,
   temperature: 0.7,
+  timeoutSeconds: 120, // 120s recommended for open models like Gemma
   animationSpeed: 1.0,
 };
 
@@ -78,6 +79,19 @@ export function createSettingsModal({ container, onSave, bus }) {
             </div>
 
             <div class="form-group">
+              <label class="form-label" for="cfg-timeout">Tempo Limite de Espera (Timeout):</label>
+              <select id="cfg-timeout" class="form-select">
+                <option value="30">30 segundos (Gemini Flash rapido)</option>
+                <option value="60">60 segundos (Padrao Gemini)</option>
+                <option value="90">90 segundos</option>
+                <option value="120">120 segundos (Recomendado para Gemma)</option>
+                <option value="180">180 segundos (Gemma em horarios de pico)</option>
+                <option value="240">240 segundos (4 minutos - maximo)</option>
+              </select>
+              <span class="form-hint">Modelos abertos grandes como <code>gemma-4-26b-a4b-it</code> levam mais tempo para responder no Google AI Studio. Recomendamos 120s ou 180s.</span>
+            </div>
+
+            <div class="form-group">
               <label class="form-label" for="cfg-temp">Temperatura: <span id="cfg-temp-val">0.7</span></label>
               <input type="range" id="cfg-temp" min="0" max="1" step="0.1" value="0.7" class="form-range" />
               <span class="form-hint">Valores menores (0.2-0.5) produzem respostas mais precisas e aderentes as regras; valores maiores dao mais criatividade narrativa.</span>
@@ -111,6 +125,7 @@ export function createSettingsModal({ container, onSave, bus }) {
   const apiKeyInput = container.querySelector('#cfg-apikey');
   const toggleKeyBtn = container.querySelector('#cfg-toggle-key');
   const modelInput = container.querySelector('#cfg-model');
+  const timeoutSelect = container.querySelector('#cfg-timeout');
   const tempRange = container.querySelector('#cfg-temp');
   const tempVal = container.querySelector('#cfg-temp-val');
   const speedSelect = container.querySelector('#cfg-speed');
@@ -122,6 +137,7 @@ export function createSettingsModal({ container, onSave, bus }) {
     geminiFields.style.display = settings.provider === 'gemini' ? 'block' : 'none';
     apiKeyInput.value = settings.apiKey || '';
     modelInput.value = settings.model || DEFAULT_MODEL;
+    timeoutSelect.value = String(settings.timeoutSeconds || 120);
     tempRange.value = settings.temperature ?? 0.7;
     tempVal.textContent = tempRange.value;
     speedSelect.value = String(settings.animationSpeed || 1.0);
@@ -141,6 +157,13 @@ export function createSettingsModal({ container, onSave, bus }) {
 
   providerSelect.addEventListener('change', () => {
     geminiFields.style.display = providerSelect.value === 'gemini' ? 'block' : 'none';
+  });
+
+  modelInput.addEventListener('input', () => {
+    const val = modelInput.value.toLowerCase();
+    if (val.includes('gemma') && parseInt(timeoutSelect.value, 10) < 120) {
+      timeoutSelect.value = '120';
+    }
   });
 
   toggleKeyBtn.addEventListener('click', () => {
@@ -176,6 +199,7 @@ export function createSettingsModal({ container, onSave, bus }) {
     settings.provider = providerSelect.value;
     settings.apiKey = apiKeyInput.value.trim();
     settings.model = modelInput.value.trim() || DEFAULT_MODEL;
+    settings.timeoutSeconds = parseInt(timeoutSelect.value, 10) || 120;
     settings.temperature = parseFloat(tempRange.value);
     settings.animationSpeed = parseFloat(speedSelect.value);
     saveSettings(settings);

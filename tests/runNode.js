@@ -9,6 +9,7 @@ import './actionQueue.test.js';
 import './responseParser.test.js';
 import './session.test.js';
 import './goldenFixtures.test.js';
+import './llmClient.test.js';
 
 async function main() {
   console.log('=== RPG_LLM TEST RUNNER ===\n');

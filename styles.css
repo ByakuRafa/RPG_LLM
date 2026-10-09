@@ -540,11 +540,42 @@ body {
 .chat-thinking-badge {
   margin-top: 8px;
   font-size: 11px;
-  color: var(--accent-yellow);
+  color: #7d4e00;
+  background-color: #fff8c5;
+  border: 1px solid #f2e38c;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-weight: 500;
+}
+
+.chat-thinking-content {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-thinking-cancel-btn {
+  background: transparent;
+  border: 1px solid #d4a72c;
+  color: #7d4e00;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: background-color 0.15s ease;
+  flex-shrink: 0;
+}
+
+.chat-thinking-cancel-btn:hover {
+  background-color: #f7e18b;
 }
 
 .spinner {

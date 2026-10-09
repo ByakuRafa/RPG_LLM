@@ -66,6 +66,7 @@ export function bootstrap() {
     container: chatContainer,
     bus,
     onSendAction: (action) => gameMaster.handlePlayerInput(action),
+    onCancelAction: () => gameMaster.cancel(),
   });
 
   const debugContainer = document.getElementById('debug-container');
