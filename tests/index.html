@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RPG_LLM — Suite de Testes Automatizados (Browser Runner)</title>
+  <style>
+    body {
+      background-color: #0e1117;
+      color: #e6edf3;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      padding: 24px;
+      margin: 0;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid #30363d;
+      padding-bottom: 16px;
+      margin-bottom: 20px;
+    }
+    h1 { margin: 0; font-size: 1.3rem; }
+    .back-link { color: #58a6ff; text-decoration: none; font-size: 0.9rem; }
+    .summary-bar {
+      display: flex;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+    .pill {
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 0.9rem;
+    }
+    .pill-pass { background-color: #1b4728; color: #7ee787; }
+    .pill-fail { background-color: #491818; color: #ff7b72; }
+    .pill-total { background-color: #21262d; color: #c9d1d9; }
+    .suite-card {
+      background-color: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      overflow: hidden;
+    }
+    .suite-header {
+      padding: 10px 16px;
+      background-color: #1c2128;
+      font-weight: 700;
+      font-size: 0.95rem;
+      border-bottom: 1px solid #30363d;
+    }
+    .test-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 16px;
+      border-bottom: 1px solid #21262d;
+      font-size: 0.88rem;
+    }
+    .test-row:last-child { border-bottom: none; }
+    .test-name { display: flex; align-items: center; gap: 8px; }
+    .icon-pass { color: #3fb950; font-weight: bold; }
+    .icon-fail { color: #f85149; font-weight: bold; }
+    .test-time { color: #8b949e; font-size: 0.8rem; font-family: monospace; }
+    .error-msg {
+      background-color: #3b1818;
+      color: #ff7b72;
+      padding: 8px 16px;
+      font-family: monospace;
+      font-size: 0.8rem;
+      white-space: pre-wrap;
+      border-top: 1px solid #491818;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>🧪 RPG_LLM Test Suite Runner</h1>
+    <a href="../index.html" class="back-link">← Voltar ao Jogo</a>
+  </div>
+
+  <div class="summary-bar">
+    <div class="pill pill-pass" id="summary-pass">Passou: 0</div>
+    <div class="pill pill-fail" id="summary-fail">Falhou: 0</div>
+    <div class="pill pill-total" id="summary-total">Total: 0</div>
+  </div>
+
+  <div id="suites-container">Executando suítes de teste...</div>
+
+  <script type="module">
+    import { runAllTests } from './runner.js';
+    import './schema.test.js';
+    import './rules.test.js';
+    import './gameState.test.js';
+    import './actionQueue.test.js';
+    import './responseParser.test.js';
+    import './session.test.js';
+    import './goldenFixtures.test.js';
+
+    const container = document.getElementById('suites-container');
+    const passEl = document.getElementById('summary-pass');
+    const failEl = document.getElementById('summary-fail');
+    const totalEl = document.getElementById('summary-total');
+
+    const res = await runAllTests();
+
+    passEl.textContent = `Passou: ${res.passed}`;
+    failEl.textContent = `Falhou: ${res.failed}`;
+    totalEl.textContent = `Total: ${res.total}`;
+
+    container.innerHTML = res.suites.map(s => `
+      <div class="suite-card">
+        <div class="suite-header">${s.name}</div>
+        ${s.tests.map(t => `
+          <div class="test-row">
+            <span class="test-name">
+              <span class="${t.pass ? 'icon-pass' : 'icon-fail'}">${t.pass ? '✓' : '✗'}</span>
+              ${t.name}
+            </span>
+            <span class="test-time">${t.duration}ms</span>
+          </div>
+          ${t.error ? `<div class="error-msg">${t.error}</div>` : ''}
+        `).join('')}
+      </div>
+    `).join('');
+  </script>
+</body>
+</html>

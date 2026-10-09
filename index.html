@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RPG_LLM — Mestre IA PoC (Zero-Server Web Stack)</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app" class="app-layout">
+    <!-- Top Header -->
+    <header class="app-header">
+      <div class="header-brand">
+        <h1 class="logo-title">⚔ RPG_LLM</h1>
+        <span class="logo-subtitle">AI Game Master PoC · 2D Grid & Action Queue</span>
+      </div>
+      <div class="header-actions">
+        <a href="tests/index.html" target="_blank" class="nav-btn test-link-btn" title="Abrir bateria de testes unitários">🧪 Executar Testes</a>
+        <button id="btn-open-settings" class="nav-btn" title="Configurar chave Gemini e parâmetros">⚙ Configurações</button>
+      </div>
+    </header>
+
+    <!-- Main Workspace -->
+    <main class="main-content">
+      <!-- Left Column: Game View (Canvas + HUD + Narrative) -->
+      <section class="game-column">
+        <!-- HUD Stats & Inventory -->
+        <div id="hud-container" class="hud-panel card"></div>
+
+        <!-- Canvas Map Area -->
+        <div class="canvas-wrapper card">
+          <canvas id="grid-canvas" width="500" height="500"></canvas>
+          <div id="tile-info-bar" class="tile-info-bar">&nbsp;</div>
+        </div>
+
+        <!-- Narrative Chat & Input -->
+        <div id="chat-container" class="chat-panel card"></div>
+      </section>
+
+      <!-- Right Column: Developer Dashboard (Human GM Mode + Debug Inspector) -->
+      <aside class="dev-column">
+        <!-- Human GM Panel (Feature Special: Bypass LLM & Test Frontend) -->
+        <div id="gm-container" class="gm-panel card"></div>
+
+        <!-- Technical Inspector & Debug Console -->
+        <div id="debug-container" class="debug-panel card"></div>
+      </aside>
+    </main>
+  </div>
+
+  <!-- Modal Container -->
+  <div id="modal-container"></div>
+
+  <!-- ES Modules Entry Point -->
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>

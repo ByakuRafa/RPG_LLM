@@ -1,0 +1,193 @@
+/**
+ * Settings Modal: manages Gemini API Key, model selector, temperature
+ * and mock toggle. Stores settings securely in localStorage.
+ */
+import { DEFAULT_MODEL, listGeminiModels } from '../llm/llmClient.js';
+
+const STORAGE_KEY = 'rpg_llm_settings_v1';
+
+export const DEFAULT_SETTINGS = {
+  provider: 'mock', // default to mock so user can play immediately out of the box!
+  apiKey: '',
+  model: DEFAULT_MODEL,
+  temperature: 0.7,
+  animationSpeed: 1.0,
+};
+
+export function loadSettings() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return { ...DEFAULT_SETTINGS };
+    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+  } catch {
+    return { ...DEFAULT_SETTINGS };
+  }
+}
+
+export function saveSettings(settings) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+  } catch (err) {
+    console.error('Failed to save settings:', err);
+  }
+}
+
+export function createSettingsModal({ container, onSave, bus }) {
+  let settings = loadSettings();
+
+  container.innerHTML = `
+    <div class="modal-backdrop" id="settings-backdrop" style="display: none;">
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <h3 class="modal-title">⚙ Configurações de IA e Motor</h3>
+          <button class="modal-close-btn" id="modal-close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label class="form-label" for="cfg-provider">Provedor Ativo:</label>
+            <select id="cfg-provider" class="form-select">
+              <option value="mock">Simulador Mock (Sem custo / Testes)</option>
+              <option value="gemini">Google Gemini (Google AI Studio)</option>
+            </select>
+            <span class="form-hint">O simulador Mock permite testar toda a mecânica e interface sem precisar de chave de API.</span>
+          </div>
+
+          <div id="gemini-fields" style="display: none;">
+            <div class="form-group">
+              <label class="form-label" for="cfg-apikey">Chave de API do Google AI Studio:</label>
+              <div class="input-password-wrapper">
+                <input type="password" id="cfg-apikey" class="form-input" placeholder="Cole sua chave AI Studio aqui (AIzaSy...)" />
+                <button type="button" id="cfg-toggle-key" class="btn-toggle-vis">👁</button>
+              </div>
+              <span class="form-hint">Sua chave fica salva apenas no <code>localStorage</code> do seu navegador e nunca é enviada a servidores externos.</span>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="cfg-model">Modelo Gemini:</label>
+              <div class="model-select-wrapper">
+                <input type="text" id="cfg-model" class="form-input" list="gemini-models-list" value="${DEFAULT_MODEL}" />
+                <datalist id="gemini-models-list">
+                  <option value="gemini-2.5-flash">gemini-2.5-flash (Rápido e Estável)</option>
+                  <option value="gemini-2.5-pro">gemini-2.5-pro (Raciocínio Avançado)</option>
+                  <option value="gemini-3.8-flash">gemini-3.8-flash (Nova Geração)</option>
+                </datalist>
+                <button type="button" id="cfg-test-key-btn" class="btn-secondary">Testar Chave</button>
+              </div>
+              <div id="cfg-test-result" class="test-result-msg"></div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="cfg-temp">Temperatura: <span id="cfg-temp-val">0.7</span></label>
+              <input type="range" id="cfg-temp" min="0" max="1" step="0.1" value="0.7" class="form-range" />
+              <span class="form-hint">Valores menores (0.2-0.5) produzem respostas mais precisas e aderentes às regras; valores maiores dão mais criatividade narrativa.</span>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="cfg-speed">Velocidade das Animações:</label>
+            <select id="cfg-speed" class="form-select">
+              <option value="1.0">Normal (1x ~200ms)</option>
+              <option value="1.5">Rápida (1.5x)</option>
+              <option value="2.5">Turbo (2.5x)</option>
+              <option value="10.0">Instantânea (sem delay)</option>
+            </select>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" id="cfg-cancel-btn" class="btn-secondary">Cancelar</button>
+          <button type="button" id="cfg-save-btn" class="btn-primary">Salvar Configurações</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const backdrop = container.querySelector('#settings-backdrop');
+  const closeBtn = container.querySelector('#modal-close');
+  const cancelBtn = container.querySelector('#cfg-cancel-btn');
+  const saveBtn = container.querySelector('#cfg-save-btn');
+  const providerSelect = container.querySelector('#cfg-provider');
+  const geminiFields = container.querySelector('#gemini-fields');
+  const apiKeyInput = container.querySelector('#cfg-apikey');
+  const toggleKeyBtn = container.querySelector('#cfg-toggle-key');
+  const modelInput = container.querySelector('#cfg-model');
+  const tempRange = container.querySelector('#cfg-temp');
+  const tempVal = container.querySelector('#cfg-temp-val');
+  const speedSelect = container.querySelector('#cfg-speed');
+  const testKeyBtn = container.querySelector('#cfg-test-key-btn');
+  const testResultMsg = container.querySelector('#cfg-test-result');
+
+  function updateUiFromSettings() {
+    providerSelect.value = settings.provider;
+    geminiFields.style.display = settings.provider === 'gemini' ? 'block' : 'none';
+    apiKeyInput.value = settings.apiKey || '';
+    modelInput.value = settings.model || DEFAULT_MODEL;
+    tempRange.value = settings.temperature ?? 0.7;
+    tempVal.textContent = tempRange.value;
+    speedSelect.value = String(settings.animationSpeed || 1.0);
+    testResultMsg.textContent = '';
+    testResultMsg.className = 'test-result-msg';
+  }
+
+  function open() {
+    settings = loadSettings();
+    updateUiFromSettings();
+    backdrop.style.display = 'flex';
+  }
+
+  function close() {
+    backdrop.style.display = 'none';
+  }
+
+  providerSelect.addEventListener('change', () => {
+    geminiFields.style.display = providerSelect.value === 'gemini' ? 'block' : 'none';
+  });
+
+  toggleKeyBtn.addEventListener('click', () => {
+    const isPw = apiKeyInput.type === 'password';
+    apiKeyInput.type = isPw ? 'text' : 'password';
+    toggleKeyBtn.textContent = isPw ? '🔒' : '👁';
+  });
+
+  tempRange.addEventListener('input', () => {
+    tempVal.textContent = tempRange.value;
+  });
+
+  testKeyBtn.addEventListener('click', async () => {
+    const key = apiKeyInput.value.trim();
+    if (!key) {
+      testResultMsg.textContent = 'Digite uma chave antes de testar.';
+      testResultMsg.className = 'test-result-msg error';
+      return;
+    }
+    testResultMsg.textContent = 'Verificando chave junto à API do Google...';
+    testResultMsg.className = 'test-result-msg info';
+    try {
+      const models = await listGeminiModels(key);
+      testResultMsg.textContent = `✓ Chave válida! ${models.length} modelos disponíveis para geração.`;
+      testResultMsg.className = 'test-result-msg success';
+    } catch (err) {
+      testResultMsg.textContent = `✗ Falha: ${err.message}`;
+      testResultMsg.className = 'test-result-msg error';
+    }
+  });
+
+  saveBtn.addEventListener('click', () => {
+    settings.provider = providerSelect.value;
+    settings.apiKey = apiKeyInput.value.trim();
+    settings.model = modelInput.value.trim() || DEFAULT_MODEL;
+    settings.temperature = parseFloat(tempRange.value);
+    settings.animationSpeed = parseFloat(speedSelect.value);
+    saveSettings(settings);
+    close();
+    onSave(settings);
+    bus?.emit('settings:updated', settings);
+  });
+
+  closeBtn.addEventListener('click', close);
+  cancelBtn.addEventListener('click', close);
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) close();
+  });
+
+  return { open, close, getSettings: () => settings };
+}
