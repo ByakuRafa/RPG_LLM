@@ -28,7 +28,9 @@ function buildGeminiBody(request, settings, { minimal = false, noMime = false } 
   const isGemma = /gemma/i.test(settings.model || '');
   const generationConfig = {
     temperature: settings.temperature ?? 0.7,
-    maxOutputTokens: isGemma ? 512 : 1024, // Limiting output tokens speeds up generation significantly
+    // Thinking models budget thought tokens within maxOutputTokens.
+    // 8192 gives ample headroom for reasoning (600-1200 tokens) + JSON response without hitting MAX_TOKENS.
+    maxOutputTokens: isGemma ? 2048 : 8192,
   };
   if (!noMime && !isGemma) {
     generationConfig.responseMimeType = 'application/json';
@@ -110,8 +112,13 @@ function extractText(data) {
   const cand = data?.candidates?.[0];
   if (!cand) throw new LLMError('Resposta sem candidatos', { kind: 'empty' });
   const text = (cand.content?.parts ?? []).filter((p) => !p.thought).map((p) => p.text ?? '').join('');
-  if (!text && cand.finishReason && cand.finishReason !== 'STOP') {
-    throw new LLMError(`Geracao interrompida: ${cand.finishReason}`, { kind: 'finish' });
+  if (!text) {
+    if (cand.finishReason === 'MAX_TOKENS') {
+      throw new LLMError('Geracao interrompida: MAX_TOKENS (raciocinio excedeu o limite de tokens).', { kind: 'finish' });
+    }
+    if (cand.finishReason && cand.finishReason !== 'STOP') {
+      throw new LLMError(`Geracao interrompida: ${cand.finishReason}`, { kind: 'finish' });
+    }
   }
   return text;
 }
@@ -142,6 +149,12 @@ export function createGeminiAdapter({ getSettings, fetchImpl = (...a) => fetch(.
       const t0 = performance.now();
 
       let { res, data } = await postJson(url, buildGeminiBody(request, { ...settings, model }), settings.apiKey, fetchImpl, timeoutMs, signal);
+      // Auto-retry once on transient 500 / 503 Google AI Studio server hiccups
+      if ((res.status === 500 || res.status === 503) && !signal?.aborted) {
+        await new Promise((r) => setTimeout(r, 600));
+        ({ res, data } = await postJson(url, buildGeminiBody(request, { ...settings, model }), settings.apiKey, fetchImpl, timeoutMs, signal));
+      }
+
       let degraded = false;
       if (res.status === 400 && !isGemma) {
         ({ res, data } = await postJson(url, buildGeminiBody(request, { ...settings, model }, { minimal: true }), settings.apiKey, fetchImpl, timeoutMs, signal));

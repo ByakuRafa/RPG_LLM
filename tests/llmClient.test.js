@@ -116,4 +116,34 @@ describe('LLM / Client and Timeout Handling', () => {
     expect(res.status).toBe('canceled');
     expect(gm.busy).toBe(false);
   });
+
+  it('automatically retries once on transient HTTP 500 server error', async () => {
+    let callCount = 0;
+    const fakeFetch = async (url, opts) => {
+      callCount++;
+      if (callCount === 1) {
+        return {
+          ok: false,
+          status: 500,
+          json: async () => ({ error: { message: 'Internal error encountered.' } }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [{ content: { parts: [{ text: '{"narrative":"Sucesso apos retry","commands":[]}' }] } }],
+        }),
+      };
+    };
+
+    const adapter = createGeminiAdapter({
+      getSettings: () => ({ apiKey: 'fake-key', model: 'gemini-3.8-flash' }),
+      fetchImpl: fakeFetch,
+    });
+
+    const reply = await adapter.send({ system: 'sys', contents: [{ role: 'user', text: 'hi' }] });
+    expect(callCount).toBe(2);
+    expect(reply.text).toContain('Sucesso apos retry');
+  });
 });

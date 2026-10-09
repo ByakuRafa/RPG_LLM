@@ -118,36 +118,53 @@ export function renderStateSnapshot(state) {
   ].join('\n');
 }
 
+function extractNarrative(rawJson) {
+  try {
+    const parsed = typeof rawJson === 'string' ? JSON.parse(rawJson) : rawJson;
+    return parsed?.narrative || '';
+  } catch {
+    return '';
+  }
+}
+
 function describeRejections(rejections) {
   if (!rejections?.length) return 'none';
   return rejections.map((r) => `- ${JSON.stringify(r.cmd)} -> ${r.reason}`).join('\n');
 }
 
-export function buildTurnMessage({ state, action, rejections }) {
+export function buildTurnMessage({ state, history = [], action, rejections }) {
+  const recent = (history || []).slice(-3);
+  const recentEvents = recent.length
+    ? [
+        'RECENT TURNS CONTEXT:',
+        ...recent.map((h) => {
+          const narr = extractNarrative(h.response);
+          return `- Action: "${h.action}"${narr ? ` -> Narrative: "${narr}"` : ''}`;
+        }),
+        '',
+      ].join('\n')
+    : '';
+
   return [
     'CURRENT STATE:',
     renderStateSnapshot(state),
     '',
+    recentEvents,
     'REJECTED COMMANDS FROM LAST TURN:',
     describeRejections(rejections),
     '',
     `PLAYER ACTION: "${action}"`,
     '',
     'Reply with the JSON object only.',
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 /**
  * @param {{state: object, history: Array<{action: string, response: string}>, action: string, rejections?: Array}} p
  */
 export function buildRequest({ state, history = [], action, rejections = [] }) {
-  const contents = [];
-  for (const h of history.slice(-HISTORY_TURNS)) {
-    contents.push({ role: 'user', text: `PLAYER ACTION: "${h.action}"` });
-    contents.push({ role: 'model', text: h.response });
-  }
-  contents.push({ role: 'user', text: buildTurnMessage({ state, action, rejections }) });
-  return { system: SYSTEM_PROMPT, contents, meta: { action, repair: false } };
+  const userText = buildTurnMessage({ state, history, action, rejections });
+  return { system: SYSTEM_PROMPT, contents: [{ role: 'user', text: userText }], meta: { action, repair: false } };
 }
 
 /** Appends the invalid answer + validation errors so the model can fix it. */
