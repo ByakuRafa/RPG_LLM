@@ -67,7 +67,7 @@ export function createGameMaster({ store, queue, bus, getAdapter }) {
       return { status: 'ok', result, repaired };
     } catch (err) {
       bus?.emit('llm:error', { message: err.message, kind: err.kind ?? 'unknown' });
-      bus?.emit('narrative', { text: `⚠ ${err.message}`, source: 'system' });
+      bus?.emit('narrative', { text: `[Erro] ${err.message}`, source: 'system' });
       return { status: 'error', error: err };
     } finally {
       busy = false;

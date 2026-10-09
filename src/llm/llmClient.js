@@ -6,7 +6,7 @@ import { RESPONSE_SCHEMA } from './promptBuilder.js';
 import { manhattan } from '../engine/rules.js';
 
 export const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
-export const DEFAULT_MODEL = 'gemini-2.5-flash';
+export const DEFAULT_MODEL = 'gemini-3.8-flash';
 export const REQUEST_TIMEOUT_MS = 30000;
 
 export class LLMError extends Error {
@@ -24,13 +24,16 @@ function thinkingConfigFor(model) {
   return null;
 }
 
-function buildGeminiBody(request, settings, { minimal = false } = {}) {
+function buildGeminiBody(request, settings, { minimal = false, noMime = false } = {}) {
+  const isGemma = /gemma/i.test(settings.model || '');
   const generationConfig = {
     temperature: settings.temperature ?? 0.7,
     maxOutputTokens: 2048,
-    responseMimeType: 'application/json',
   };
-  if (!minimal) {
+  if (!noMime && !isGemma) {
+    generationConfig.responseMimeType = 'application/json';
+  }
+  if (!minimal && !isGemma) {
     generationConfig.responseSchema = RESPONSE_SCHEMA;
     const thinking = thinkingConfigFor(settings.model);
     if (thinking) generationConfig.thinkingConfig = thinking;
@@ -100,7 +103,7 @@ export function createGeminiAdapter({ getSettings, fetchImpl = (...a) => fetch(.
     name: 'gemini',
     async send(request) {
       const settings = getSettings();
-      if (!settings.apiKey) throw new LLMError('Configure sua chave de API do Gemini em ⚙ Configurações.', { kind: 'auth' });
+      if (!settings.apiKey) throw new LLMError('Configure sua chave de API do Google AI Studio em Configuracoes.', { kind: 'auth' });
       const model = settings.model || DEFAULT_MODEL;
       const url = `${GEMINI_BASE}/models/${encodeURIComponent(model)}:generateContent`;
       const t0 = performance.now();
@@ -109,6 +112,10 @@ export function createGeminiAdapter({ getSettings, fetchImpl = (...a) => fetch(.
       let degraded = false;
       if (res.status === 400) {
         ({ res, data } = await postJson(url, buildGeminiBody(request, { ...settings, model }, { minimal: true }), settings.apiKey, fetchImpl));
+        degraded = true;
+      }
+      if (res.status === 400) {
+        ({ res, data } = await postJson(url, buildGeminiBody(request, { ...settings, model }, { minimal: true, noMime: true }), settings.apiKey, fetchImpl));
         degraded = true;
       }
       if (!res.ok) throw mapHttpError(res.status, data);
@@ -128,7 +135,7 @@ export async function listGeminiModels(apiKey, fetchImpl = (...a) => fetch(...a)
 }
 
 /* ------------------------------------------------------------------------ */
-/* Mock adapter: keyword-driven, state-aware. Zero cost, used for UI tests.  */
+/* Mock adapter: keyword-driven, state-aware with complete Enemy GM Turns.  */
 /* ------------------------------------------------------------------------ */
 
 function nearest(list, from) {
@@ -143,60 +150,121 @@ const DIRECTIONS = [
 ];
 
 export function mockRespond(state, action) {
-  const a = action.toLowerCase();
+  const a = action.toLowerCase().trim();
   const ents = Object.values(state.entities);
   const p = state.entities.player;
-  const enemies = ents.filter((e) => e.faction === 'enemy');
-  const say = (narrative, commands = []) => JSON.stringify({ narrative, commands });
+  const initialEnemies = ents.filter((e) => e.faction === 'enemy' && e.hp > 0);
+  const commands = [];
+  const narrativeParts = [];
 
-  if (/atac|attack|golpe|lut|mat[ao]|bat[eo]/.test(a)) {
-    const foe = nearest(enemies, p);
-    if (!foe) return say('Não há inimigos à vista. O silêncio da masmorra responde ao seu desafio.');
-    const cmds = [];
-    if (manhattan(p, foe) !== 1) cmds.push({ type: 'MOVE', id: 'player', target: foe.id });
-    cmds.push({ type: 'ATTACK', attacker: 'player', target: foe.id });
-    if (foe.hp - p.atk > 0) cmds.push({ type: 'ATTACK', attacker: foe.id, target: 'player' });
-    return say(`(mock) Você investe contra ${foe.name.toLowerCase()} e desfere um golpe!`, cmds);
-  }
-  if (/abr|open|porta|door|ba[uú]|chest/.test(a)) {
+  // Phase 1: Player Action
+  let playerActed = false;
+
+  // Direct tile coordinates (e.g. "mover para (5, 3)" or "5, 3")
+  const coordMatch = a.match(/\(?(\d{1,2})\s*,\s*(\d{1,2})\)?/);
+  if (coordMatch && /andar|mover|ir|passo|tile/.test(a)) {
+    const targetX = parseInt(coordMatch[1], 10);
+    const targetY = parseInt(coordMatch[2], 10);
+    commands.push({ type: 'MOVE', id: 'player', to: { x: targetX, y: targetY } });
+    narrativeParts.push(`Voce se desloca com cuidado ate a coordenada (${targetX}, ${targetY}).`);
+    playerActed = true;
+  } else if (/atac|attack|golpe|lut|mat[ao]|bat[eo]/.test(a)) {
+    const foe = nearest(initialEnemies, p);
+    if (!foe) {
+      narrativeParts.push('Nao ha inimigos a vista para atacar.');
+    } else {
+      if (manhattan(p, foe) !== 1) {
+        commands.push({ type: 'MOVE', id: 'player', target: foe.id });
+      }
+      commands.push({ type: 'ATTACK', attacker: 'player', target: foe.id });
+      narrativeParts.push(`Voce investe com sua arma e golpeia ${foe.name.toLowerCase()}!`);
+    }
+    playerActed = true;
+  } else if (/abr|open|porta|door|ba[uú]|chest/.test(a)) {
     const wantsDoor = /porta|door/.test(a);
     const pool = ents.filter((e) => (wantsDoor ? e.kind === 'door' : e.kind === 'chest' || e.kind === 'door') && !e.open);
     const t = nearest(pool, p);
-    if (!t) return say('(mock) Não há nada fechado por perto para abrir.');
-    const cmds = [];
-    if (manhattan(p, t) > 1) cmds.push({ type: 'MOVE', id: 'player', target: t.id });
-    cmds.push({ type: 'INTERACT', actor: 'player', target: t.id });
-    return say(`(mock) Você se aproxima e abre ${t.name.toLowerCase()}.`, cmds);
-  }
-  if (/peg|lot|loot|saque|take|colet|recolh/.test(a)) {
+    if (!t) {
+      narrativeParts.push('Nao ha objetos fechados ao seu alcance.');
+    } else {
+      if (manhattan(p, t) > 1) {
+        commands.push({ type: 'MOVE', id: 'player', target: t.id });
+      }
+      commands.push({ type: 'INTERACT', actor: 'player', target: t.id });
+      narrativeParts.push(`Voce se aproxima e abre ${t.name.toLowerCase()}.`);
+    }
+    playerActed = true;
+  } else if (/peg|lot|loot|saque|take|colet|recolh/.test(a)) {
     const pool = ents.filter((e) => (e.kind === 'bag' || e.kind === 'chest') && e.open && e.items.length);
     const t = nearest(pool, p);
-    if (!t) return say('(mock) Não há nada para pegar por aqui.');
-    const cmds = [];
-    if (manhattan(p, t) > 1) cmds.push({ type: 'MOVE', id: 'player', target: t.id });
-    cmds.push({ type: 'LOOT', actor: 'player', from: t.id });
-    return say(`(mock) Você recolhe tudo o que encontra em ${t.name.toLowerCase()}.`, cmds);
+    if (!t) {
+      narrativeParts.push('Nao ha espolios ou itens abertos para recolher por aqui.');
+    } else {
+      if (manhattan(p, t) > 1) {
+        commands.push({ type: 'MOVE', id: 'player', target: t.id });
+      }
+      commands.push({ type: 'LOOT', actor: 'player', from: t.id });
+      narrativeParts.push(`Voce recolhe os itens de ${t.name.toLowerCase()} para sua bolsa.`);
+    }
+    playerActed = true;
+  } else {
+    const dir = DIRECTIONS.find((d) => d.re.test(a));
+    if (dir) {
+      const to = { x: p.x + dir.dx * 2, y: p.y + dir.dy * 2 };
+      commands.push({ type: 'MOVE', id: 'player', to });
+      narrativeParts.push(`Voce da alguns passos em direcao ao ${dir.pt}.`);
+      playerActed = true;
+    }
   }
-  const dir = DIRECTIONS.find((d) => d.re.test(a));
-  if (dir) {
-    const to = { x: p.x + dir.dx * 2, y: p.y + dir.dy * 2 };
-    return say(`(mock) Você caminha para o ${dir.pt}.`, [{ type: 'MOVE', id: 'player', to }]);
+
+  if (!playerActed) {
+    narrativeParts.push('O Mestre observa sua hesitacao. Tente comandos diretos como: atacar, abrir porta, saquear bau, ou andar para norte, sul, leste, oeste.');
   }
-  return say('(mock) O Mestre pondera, mas nada acontece. Tente: atacar, abrir, pegar, ir para o norte/sul/leste/oeste.');
+
+  // Phase 2: Game Master / Enemy Turn
+  // Enemies act: if adjacent to player, attack; if nearby (<= 4 tiles), advance toward player!
+  const playerDmgDealt = commands.filter((c) => c.type === 'ATTACK' && c.attacker === 'player').length * (p.atk || 4);
+  const targetFoe = commands.find((c) => c.type === 'ATTACK' && c.attacker === 'player')?.target;
+
+  const enemyTurnNarratives = [];
+  for (const enemy of initialEnemies) {
+    const currentHp = enemy.id === targetFoe ? enemy.hp - playerDmgDealt : enemy.hp;
+    if (currentHp <= 0) continue; // Enemy died this turn
+
+    const dist = manhattan(enemy, p);
+    if (dist <= 1 || (commands.some((c) => c.type === 'MOVE' && c.id === 'player') && dist <= 2)) {
+      // Enemy is adjacent: counterattack or attack!
+      commands.push({ type: 'ATTACK', attacker: enemy.id, target: 'player' });
+      enemyTurnNarratives.push(`${enemy.name} ataca voce ferozmente com suas garras!`);
+    } else if (dist <= 4) {
+      // Enemy is nearby: move toward player
+      commands.push({ type: 'MOVE', id: enemy.id, target: 'player' });
+      enemyTurnNarratives.push(`${enemy.name} nota sua presenca e avanca em sua direcao!`);
+    }
+  }
+
+  if (enemyTurnNarratives.length > 0) {
+    narrativeParts.push(`[Turno dos Inimigos] ${enemyTurnNarratives.join(' ')}`);
+  }
+
+  return JSON.stringify({
+    narrative: narrativeParts.join(' '),
+    commands,
+  });
 }
 
 /**
  * Mock LLM. Typing "quebrado"/"invalid" returns garbage first so the repair
  * path can be exercised; the repair request gets a valid answer.
  */
-export function createMockAdapter({ getState, latencyMs = 350 }) {
+export function createMockAdapter({ getState, latencyMs = 250 }) {
   return {
     name: 'mock',
     async send(request) {
       await new Promise((r) => setTimeout(r, latencyMs));
       const action = request.meta?.action ?? '';
       if (/quebrad|invalid/i.test(action) && !request.meta?.repair) {
-        return { text: 'Claro! Aqui está: {"narrative": "resposta quebrada", "commands": [ {"type": "MOVE"', latencyMs };
+        return { text: 'Claro! Aqui esta: {"narrative": "resposta quebrada", "commands": [ {"type": "MOVE"', latencyMs };
       }
       return { text: mockRespond(getState(), action), latencyMs };
     },

@@ -32,7 +32,7 @@ export function createHud({ container, store, bus }) {
       </div>
     </div>
     <div class="inventory-bar">
-      <span class="inv-title">🎒 Inventário:</span>
+      <span class="inv-title">Inventario:</span>
       <div class="inv-items" id="hud-inventory">
         <span class="inv-empty">Vazio</span>
       </div>
@@ -58,10 +58,10 @@ export function createHud({ container, store, bus }) {
       statusEl.textContent = 'EM JOGO';
     } else if (s.status === 'won') {
       statusEl.classList.add('status-won');
-      statusEl.textContent = '🏆 VITÓRIA';
+      statusEl.textContent = 'VITORIA';
     } else if (s.status === 'lost') {
       statusEl.classList.add('status-lost');
-      statusEl.textContent = '💀 DERROTA';
+      statusEl.textContent = 'DERROTA';
     }
 
     // Player Stats

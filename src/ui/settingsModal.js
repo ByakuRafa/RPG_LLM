@@ -39,7 +39,7 @@ export function createSettingsModal({ container, onSave, bus }) {
     <div class="modal-backdrop" id="settings-backdrop" style="display: none;">
       <div class="modal-dialog">
         <div class="modal-header">
-          <h3 class="modal-title">⚙ Configurações de IA e Motor</h3>
+          <h3 class="modal-title">Configuracoes de IA e Motor</h3>
           <button class="modal-close-btn" id="modal-close">&times;</button>
         </div>
         <div class="modal-body">
@@ -47,9 +47,9 @@ export function createSettingsModal({ container, onSave, bus }) {
             <label class="form-label" for="cfg-provider">Provedor Ativo:</label>
             <select id="cfg-provider" class="form-select">
               <option value="mock">Simulador Mock (Sem custo / Testes)</option>
-              <option value="gemini">Google Gemini (Google AI Studio)</option>
+              <option value="gemini">Google Gemini / Gemma (Google AI Studio)</option>
             </select>
-            <span class="form-hint">O simulador Mock permite testar toda a mecânica e interface sem precisar de chave de API.</span>
+            <span class="form-hint">O simulador Mock permite testar toda a mecanica sem precisar de chave de API.</span>
           </div>
 
           <div id="gemini-fields" style="display: none;">
@@ -57,19 +57,20 @@ export function createSettingsModal({ container, onSave, bus }) {
               <label class="form-label" for="cfg-apikey">Chave de API do Google AI Studio:</label>
               <div class="input-password-wrapper">
                 <input type="password" id="cfg-apikey" class="form-input" placeholder="Cole sua chave AI Studio aqui (AIzaSy...)" />
-                <button type="button" id="cfg-toggle-key" class="btn-toggle-vis">👁</button>
+                <button type="button" id="cfg-toggle-key" class="btn-toggle-vis">Ver</button>
               </div>
-              <span class="form-hint">Sua chave fica salva apenas no <code>localStorage</code> do seu navegador e nunca é enviada a servidores externos.</span>
+              <span class="form-hint">Sua chave fica salva apenas no <code>localStorage</code> do seu navegador e nunca e enviada a servidores externos.</span>
             </div>
 
             <div class="form-group">
-              <label class="form-label" for="cfg-model">Modelo Gemini:</label>
+              <label class="form-label" for="cfg-model">Modelo (Gemini / Gemma):</label>
               <div class="model-select-wrapper">
                 <input type="text" id="cfg-model" class="form-input" list="gemini-models-list" value="${DEFAULT_MODEL}" />
                 <datalist id="gemini-models-list">
-                  <option value="gemini-2.5-flash">gemini-2.5-flash (Rápido e Estável)</option>
-                  <option value="gemini-2.5-pro">gemini-2.5-pro (Raciocínio Avançado)</option>
-                  <option value="gemini-3.8-flash">gemini-3.8-flash (Nova Geração)</option>
+                  <option value="gemini-3.8-flash">gemini-3.8-flash (Recomendado / Mais recente)</option>
+                  <option value="gemma-4-26b-a4b-it">gemma-4-26b-a4b-it (Gemma 4 Instruct)</option>
+                  <option value="gemini-3.7-flash">gemini-3.7-flash (Flash 3.7)</option>
+                  <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (Ultra rapido)</option>
                 </datalist>
                 <button type="button" id="cfg-test-key-btn" class="btn-secondary">Testar Chave</button>
               </div>
@@ -79,23 +80,23 @@ export function createSettingsModal({ container, onSave, bus }) {
             <div class="form-group">
               <label class="form-label" for="cfg-temp">Temperatura: <span id="cfg-temp-val">0.7</span></label>
               <input type="range" id="cfg-temp" min="0" max="1" step="0.1" value="0.7" class="form-range" />
-              <span class="form-hint">Valores menores (0.2-0.5) produzem respostas mais precisas e aderentes às regras; valores maiores dão mais criatividade narrativa.</span>
+              <span class="form-hint">Valores menores (0.2-0.5) produzem respostas mais precisas e aderentes as regras; valores maiores dao mais criatividade narrativa.</span>
             </div>
           </div>
 
           <div class="form-group">
-            <label class="form-label" for="cfg-speed">Velocidade das Animações:</label>
+            <label class="form-label" for="cfg-speed">Velocidade das Animacoes:</label>
             <select id="cfg-speed" class="form-select">
               <option value="1.0">Normal (1x ~200ms)</option>
-              <option value="1.5">Rápida (1.5x)</option>
+              <option value="1.5">Rapida (1.5x)</option>
               <option value="2.5">Turbo (2.5x)</option>
-              <option value="10.0">Instantânea (sem delay)</option>
+              <option value="10.0">Instantanea (sem delay)</option>
             </select>
           </div>
         </div>
         <div class="modal-footer">
           <button type="button" id="cfg-cancel-btn" class="btn-secondary">Cancelar</button>
-          <button type="button" id="cfg-save-btn" class="btn-primary">Salvar Configurações</button>
+          <button type="button" id="cfg-save-btn" class="btn-primary">Salvar Configuracoes</button>
         </div>
       </div>
     </div>
@@ -145,7 +146,7 @@ export function createSettingsModal({ container, onSave, bus }) {
   toggleKeyBtn.addEventListener('click', () => {
     const isPw = apiKeyInput.type === 'password';
     apiKeyInput.type = isPw ? 'text' : 'password';
-    toggleKeyBtn.textContent = isPw ? '🔒' : '👁';
+    toggleKeyBtn.textContent = isPw ? 'Ocultar' : 'Ver';
   });
 
   tempRange.addEventListener('input', () => {
@@ -159,14 +160,14 @@ export function createSettingsModal({ container, onSave, bus }) {
       testResultMsg.className = 'test-result-msg error';
       return;
     }
-    testResultMsg.textContent = 'Verificando chave junto à API do Google...';
+    testResultMsg.textContent = 'Verificando chave junto a API do Google...';
     testResultMsg.className = 'test-result-msg info';
     try {
       const models = await listGeminiModels(key);
-      testResultMsg.textContent = `✓ Chave válida! ${models.length} modelos disponíveis para geração.`;
+      testResultMsg.textContent = `[OK] Chave valida! ${models.length} modelos disponiveis para geracao.`;
       testResultMsg.className = 'test-result-msg success';
     } catch (err) {
-      testResultMsg.textContent = `✗ Falha: ${err.message}`;
+      testResultMsg.textContent = `[Erro] Falha: ${err.message}`;
       testResultMsg.className = 'test-result-msg error';
     }
   });

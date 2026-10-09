@@ -14,23 +14,23 @@ const OPEN_MS = 120;
 const LOOT_MS = 160;
 
 const COLORS = {
-  bg: '#12141a',
-  floor: '#1d2129',
-  floorLine: '#262b35',
-  wall: '#3b4150',
-  wallTop: '#4a5163',
-  coord: '#5c6475',
-  select: '#ffd54f',
-  hover: 'rgba(255,255,255,0.06)',
-  player: '#4fc3f7',
-  goblin: '#8bc34a',
-  skeleton: '#e0e0e0',
-  dead: '#555',
-  chest: '#b8860b',
-  chestDark: '#6b4f12',
-  door: '#8d6e63',
-  doorDark: '#5d4037',
-  bag: '#ffca28',
+  bg: '#f6f8fa',
+  floor: '#ffffff',
+  floorLine: '#e1e4e8',
+  wall: '#24292f',
+  wallTop: '#32383f',
+  coord: '#8c959f',
+  select: '#0969da',
+  hover: 'rgba(9, 105, 218, 0.08)',
+  player: '#0969da',
+  goblin: '#1a7f37',
+  skeleton: '#57606a',
+  dead: '#8c959f',
+  chest: '#9a6700',
+  chestDark: '#7d5400',
+  door: '#6e7781',
+  doorDark: '#57606a',
+  bag: '#d4a72c',
 };
 
 const GLYPH = { player: '@', goblin: 'g', skeleton: 's' };
@@ -207,7 +207,7 @@ export function createGridRenderer({ canvas, store, bus, infoEl = null }) {
       ctx.arc(cx, cy, (TILE / 2 - 3) * scale, 0, Math.PI * 2);
       ctx.fill();
     }
-    ctx.fillStyle = '#0d0f14';
+    ctx.fillStyle = '#ffffff';
     ctx.font = `bold ${Math.round(18 * scale)}px ui-monospace, monospace`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -216,9 +216,9 @@ export function createGridRenderer({ canvas, store, bus, infoEl = null }) {
     if (!dead && typeof e.maxHp === 'number') {
       const w = TILE - 10;
       const ratio = Math.max(0, e.hp / e.maxHp);
-      ctx.fillStyle = '#000a';
+      ctx.fillStyle = 'rgba(0,0,0,0.2)';
       ctx.fillRect(px(x) + 5, py(y) + 1, w, 4);
-      ctx.fillStyle = ratio > 0.5 ? '#66bb6a' : ratio > 0.25 ? '#ffa726' : '#ef5350';
+      ctx.fillStyle = ratio > 0.5 ? '#1a7f37' : ratio > 0.25 ? '#bf8700' : '#cf222e';
       ctx.fillRect(px(x) + 5, py(y) + 1, w * ratio, 4);
     }
     ctx.globalAlpha = 1;

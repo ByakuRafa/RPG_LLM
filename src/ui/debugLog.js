@@ -6,7 +6,7 @@ export function createDebugLog({ container, bus, metrics }) {
   container.innerHTML = `
     <div class="debug-header">
       <div class="debug-title-group">
-        <span class="debug-title">🛠 Console & Auditoria Técnica</span>
+        <span class="debug-title">Console & Auditoria Tecnica</span>
       </div>
       <div class="debug-actions">
         <button class="dbg-btn" id="dbg-clear-btn" title="Limpar console">Limpar</button>

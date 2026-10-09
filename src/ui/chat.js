@@ -6,17 +6,20 @@ export function createChat({ container, bus, onSendAction }) {
   container.innerHTML = `
     <div class="chat-header">
       <div class="chat-title-group">
-        <span class="chat-title">📜 Crônica da Masmorra</span>
+        <span class="chat-title">Cronica da Masmorra</span>
         <span class="chat-status-indicator" id="chat-status-indicator"></span>
       </div>
-      <button class="chat-clear-btn" id="chat-clear-btn" title="Limpar histórico da tela">Limpar</button>
+      <button class="chat-clear-btn" id="chat-clear-btn" title="Limpar historico da tela">Limpar</button>
     </div>
     <div class="chat-log" id="chat-log"></div>
     <div class="chat-suggestions" id="chat-suggestions">
-      <button class="chip-btn" data-action="Abro a porta">🚪 Abrir porta</button>
-      <button class="chip-btn" data-action="Ataco o goblin">⚔ Atacar goblin</button>
-      <button class="chip-btn" data-action="Abro o baú e pego o que tem dentro">📦 Abrir e saquear baú</button>
-      <button class="chip-btn" data-action="Vou até o goblin 2">👣 Ir até goblin 2</button>
+      <button class="chip-btn" data-action="Abrir porta">Abrir porta</button>
+      <button class="chip-btn" data-action="Atacar goblin">Atacar goblin</button>
+      <button class="chip-btn" data-action="Saquear bau">Saquear bau</button>
+      <button class="chip-btn" data-action="Ir para o norte">Norte</button>
+      <button class="chip-btn" data-action="Ir para o sul">Sul</button>
+      <button class="chip-btn" data-action="Ir para o leste">Leste</button>
+      <button class="chip-btn" data-action="Ir para o oeste">Oeste</button>
     </div>
     <div class="chat-input-wrapper">
       <form class="chat-form" id="chat-form">
@@ -24,13 +27,13 @@ export function createChat({ container, bus, onSendAction }) {
           type="text"
           id="chat-input"
           class="chat-input"
-          placeholder="Descreva sua ação em português... (Ex: 'Avanço e ataco o goblin')"
+          placeholder="Acao em linguagem natural ou clique no mapa... (Ex: 'atacar goblin', 'norte', 'abrir porta')"
           autocomplete="off"
         />
         <button type="submit" id="chat-send-btn" class="chat-send-btn">Enviar</button>
       </form>
       <div class="chat-thinking-badge" id="chat-thinking-badge" style="display: none;">
-        <span class="spinner"></span> O Mestre está pensando...
+        <span class="spinner"></span> O Mestre esta pensando...
       </div>
     </div>
   `;
@@ -134,15 +137,35 @@ export function createChat({ container, bus, onSendAction }) {
 
   bus.on('game:over', ({ status }) => {
     if (status === 'won') {
-      appendEntry({ text: '🏆 Parabéns! Você derrotou todos os inimigos da masmorra!', type: 'system', source: 'system' });
+      appendEntry({ text: '[Vitoria] Parabens! Voce derrotou todos os inimigos da masmorra!', type: 'system', source: 'system' });
     } else if (status === 'lost') {
-      appendEntry({ text: '💀 Suas forças se esgotaram... Você sucumbiu à masmorra.', type: 'system', source: 'system' });
+      appendEntry({ text: '[Derrota] Suas forcas se esgotaram... Voce sucumbiu a masmorra.', type: 'system', source: 'system' });
     }
+  });
+
+  // Easy action description from grid clicks!
+  bus.on('grid:select', ({ x, y, entityId }) => {
+    if (entityId) {
+      if (entityId.startsWith('goblin') || entityId.startsWith('skel')) {
+        inputEl.value = `Atacar ${entityId}`;
+      } else if (entityId.startsWith('door')) {
+        inputEl.value = 'Abrir porta';
+      } else if (entityId.startsWith('chest')) {
+        inputEl.value = 'Abrir e saquear bau';
+      } else if (entityId.startsWith('bag')) {
+        inputEl.value = 'Saquear espolio';
+      } else {
+        inputEl.value = `Mover ate (${x}, ${y})`;
+      }
+    } else {
+      inputEl.value = `Mover para (${x}, ${y})`;
+    }
+    inputEl.focus();
   });
 
   // Welcome message
   appendEntry({
-    text: 'Você adentra os corredores úmidos da masmorra abandonada. Uma tocha crepita na parede. À sua frente há uma porta de madeira fechada e, mais adiante, barulhos guturais de criaturas rondando...',
+    text: 'Voce adentra os corredores umidos da masmorra abandonada. Uma tocha crepita na parede. A sua frente ha uma porta de madeira fechada e, mais adiante, barulhos guturais de criaturas rondando...',
     type: 'narrative',
     source: 'gm',
   });

@@ -15,7 +15,7 @@ export function createGmPanel({ container, store, queue, bus, sessionRecorder })
   container.innerHTML = `
     <div class="gm-panel-header">
       <div class="gm-title-badge">
-        <span class="gm-icon">⚡</span>
+        <span class="gm-icon">[GM]</span>
         <span class="gm-title">HUMAN GM MODE</span>
         <span class="gm-mode-tag">Bypass LLM</span>
       </div>
@@ -33,34 +33,34 @@ export function createGmPanel({ container, store, queue, bus, sessionRecorder })
 
       <!-- Quick Action Presets -->
       <div class="gm-section">
-        <h4 class="gm-sec-title">Ações Rápidas (Presets GM)</h4>
+        <h4 class="gm-sec-title">Acoes Rapidas (Presets GM)</h4>
         <div class="gm-button-grid">
           <button class="gm-btn action-btn" id="btn-spawn-goblin">Spawn Goblin</button>
           <button class="gm-btn action-btn" id="btn-spawn-skel">Spawn Esqueleto</button>
-          <button class="gm-btn action-btn" id="btn-move-player">Mover Herói p/ Alvo</button>
-          <button class="gm-btn action-btn" id="btn-atk-goblin">Herói Ataca Goblin 1</button>
-          <button class="gm-btn action-btn" id="btn-goblin-atk">Goblin Ataca Herói</button>
+          <button class="gm-btn action-btn" id="btn-move-player">Mover Heroi p/ Alvo</button>
+          <button class="gm-btn action-btn" id="btn-atk-goblin">Heroi Ataca Goblin 1</button>
+          <button class="gm-btn action-btn" id="btn-goblin-atk">Goblin Ataca Heroi</button>
           <button class="gm-btn action-btn" id="btn-dmg-goblin">Dar 5 Dano em Goblin 1</button>
           <button class="gm-btn action-btn" id="btn-open-door">Abrir Porta</button>
-          <button class="gm-btn action-btn" id="btn-open-chest">Abrir Baú</button>
-          <button class="gm-btn action-btn" id="btn-loot-chest">Saquear Baú</button>
-          <button class="gm-btn action-btn combo-btn" id="btn-combo-start">Executar Combo 6-Ações</button>
+          <button class="gm-btn action-btn" id="btn-open-chest">Abrir Bau</button>
+          <button class="gm-btn action-btn" id="btn-loot-chest">Saquear Bau</button>
+          <button class="gm-btn action-btn combo-btn" id="btn-combo-start">Executar Combo 6-Acoes</button>
         </div>
       </div>
 
       <!-- Test Scenarios & Illegal Cases -->
       <div class="gm-section">
-        <h4 class="gm-sec-title">Harness de Testes & Casos Inválidos</h4>
+        <h4 class="gm-sec-title">Harness de Testes & Casos Invalidos</h4>
         <div class="form-group-compact">
-          <label class="gm-lbl">Testar Rejeição de Regra / Schema:</label>
+          <label class="gm-lbl">Testar Rejeicao de Regra / Schema:</label>
           <select id="gm-illegal-select" class="gm-select">
             <option value="">Selecione um caso de erro para testar...</option>
             ${ILLEGAL_PRESETS.map((p, idx) => `<option value="${idx}">[${p.expect.toUpperCase()}] ${p.label}</option>`).join('')}
           </select>
-          <button class="gm-btn warning-btn" id="btn-run-illegal">Injetar Caso Inválido</button>
+          <button class="gm-btn warning-btn" id="btn-run-illegal">Injetar Caso Invalido</button>
         </div>
         <div class="scenario-actions">
-          <button class="gm-btn scenario-btn" id="btn-run-scenario">▶ Executar Cenário Completo (8 Turnos)</button>
+          <button class="gm-btn scenario-btn" id="btn-run-scenario">Executar Cenario Completo (8 Turnos)</button>
         </div>
       </div>
 
@@ -73,18 +73,18 @@ export function createGmPanel({ container, store, queue, bus, sessionRecorder })
         <textarea id="gm-json-input" class="gm-json-textarea" spellcheck="false" rows="7" placeholder='{\n  "narrative": "...",\n  "commands": []\n}'></textarea>
         <div class="gm-raw-actions">
           <button class="gm-btn" id="btn-validate-json">Validar Schema</button>
-          <button class="gm-btn push-btn" id="btn-push-payload">🚀 Empurrar Payload (Push)</button>
+          <button class="gm-btn push-btn" id="btn-push-payload">Empurrar Payload (Push)</button>
         </div>
         <div id="gm-validation-feedback" class="gm-feedback"></div>
       </div>
 
       <!-- Session & Engine Management -->
       <div class="gm-section session-tools">
-        <h4 class="gm-sec-title">Gerenciador de Sessão & Replay</h4>
+        <h4 class="gm-sec-title">Gerenciador de Sessao & Replay</h4>
         <div class="gm-session-btns">
-          <button class="gm-btn" id="btn-export-session">📥 Exportar Sessão</button>
-          <button class="gm-btn" id="btn-replay-session">🔄 Reproduzir Sessão</button>
-          <button class="gm-btn danger-btn" id="btn-reset-game">⚡ Reiniciar Jogo</button>
+          <button class="gm-btn" id="btn-export-session">Exportar Sessao</button>
+          <button class="gm-btn" id="btn-replay-session">Reproduzir Sessao</button>
+          <button class="gm-btn danger-btn" id="btn-reset-game">Reiniciar Jogo</button>
         </div>
       </div>
     </div>
@@ -221,11 +221,11 @@ export function createGmPanel({ container, store, queue, bus, sessionRecorder })
     }
     const parsed = parseLLMResponse(text);
     if (parsed.ok) {
-      validationFeedback.textContent = `✓ JSON válido! ${parsed.payload.commands.length} comandos reconhecidos.`;
+      validationFeedback.textContent = `[OK] JSON valido! ${parsed.payload.commands.length} comandos reconhecidos.`;
       validationFeedback.className = 'gm-feedback success';
     } else {
       const errs = describeParseErrors(parsed);
-      validationFeedback.textContent = `✗ Erros (${parsed.stage}): ${errs.join('; ')}`;
+      validationFeedback.textContent = `[Erro] Erros (${parsed.stage}): ${errs.join('; ')}`;
       validationFeedback.className = 'gm-feedback error';
     }
   });
@@ -249,7 +249,7 @@ export function createGmPanel({ container, store, queue, bus, sessionRecorder })
   });
 
   replaySessionBtn.addEventListener('click', async () => {
-    const input = prompt('Cole o JSON da sessão para reproduzir (ou deixe em branco para cancelar):');
+    const input = prompt('Cole o JSON da sessao para reproduzir (ou deixe em branco para cancelar):');
     if (!input) return;
     try {
       const log = JSON.parse(input);
@@ -257,7 +257,7 @@ export function createGmPanel({ container, store, queue, bus, sessionRecorder })
       store.set(createInitialState());
       sessionRecorder.clear();
       const res = await replaySession(log, { queue, bus, store, animate: true });
-      alert(`Replay concluído!\nHash Final: ${res.hash}\nHash Esperado: ${res.expected}\nDeterminismo Confirmado: ${res.match ? 'SIM ✓' : 'NÃO ✗'}`);
+      alert(`Replay concluido!\nHash Final: ${res.hash}\nHash Esperado: ${res.expected}\nDeterminismo Confirmado: ${res.match ? 'SIM [OK]' : 'NAO [X]'}`);
     } catch (err) {
       alert(`Falha ao reproduzir: ${err.message}`);
     }
