@@ -1,318 +1,367 @@
 /**
- * LLM provider adapters. Interface: { name, send(request) => Promise<{text, latencyMs, usage?}> }
- * request = { system, contents:[{role:'user'|'model', text}], meta }
+ * REST fetch client for Google Gemini generateContent API.
+ * Handles timeouts with AbortController, transient retries (429/500/503),
+ * error classification into typed LLMErrors, and Gemma fallback formatting.
  */
-import { RESPONSE_SCHEMA } from './promptBuilder.js';
-import { manhattan } from '../engine/rules.js';
+import { RESPONSE_SCHEMA } from '../core/schema.js';
 
 export const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 export const DEFAULT_MODEL = 'gemini-3.8-flash';
-export const REQUEST_TIMEOUT_MS = 90000; // 90 seconds default (up from 30s)
+export const DEFAULT_TIMEOUT_MS = 30000;
 
 export class LLMError extends Error {
-  constructor(message, { status = null, kind = 'unknown' } = {}) {
+  constructor(message, { kind = 'unknown', status = null, originalError = null } = {}) {
     super(message);
     this.name = 'LLMError';
+    this.kind = kind; // 'auth' | 'model' | 'rate_limit' | 'server' | 'timeout' | 'network' | 'blocked' | 'truncated' | 'canceled' | 'unknown'
     this.status = status;
-    this.kind = kind;
+    this.originalError = originalError;
   }
-}
-
-function thinkingConfigFor(model) {
-  if (/2\.5-flash/.test(model)) return { thinkingBudget: 0 };
-  if (/^gemini-3/.test(model)) return { thinkingLevel: 'low' };
-  return null;
-}
-
-function buildGeminiBody(request, settings, { minimal = false, noMime = false } = {}) {
-  const isGemma = /gemma/i.test(settings.model || '');
-  const generationConfig = {
-    temperature: settings.temperature ?? 0.7,
-    // Thinking models budget thought tokens within maxOutputTokens.
-    // 8192 gives ample headroom for reasoning (600-1200 tokens) + JSON response without hitting MAX_TOKENS.
-    maxOutputTokens: isGemma ? 2048 : 8192,
-  };
-  if (!noMime && !isGemma) {
-    generationConfig.responseMimeType = 'application/json';
-  }
-  if (!minimal && !isGemma) {
-    generationConfig.responseSchema = RESPONSE_SCHEMA;
-    const thinking = thinkingConfigFor(settings.model);
-    if (thinking) generationConfig.thinkingConfig = thinking;
-  }
-  return {
-    systemInstruction: { parts: [{ text: request.system }] },
-    contents: request.contents.map((m) => ({ role: m.role, parts: [{ text: m.text }] })),
-    generationConfig,
-  };
-}
-
-async function postJson(url, body, apiKey, fetchImpl, timeoutMs = REQUEST_TIMEOUT_MS, externalSignal = null) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort('timeout'), timeoutMs);
-  let abortListener = null;
-
-  if (externalSignal) {
-    if (externalSignal.aborted) {
-      clearTimeout(timer);
-      throw new LLMError('Requisicao cancelada antes de iniciar.', { kind: 'canceled' });
-    }
-    abortListener = () => controller.abort('canceled');
-    externalSignal.addEventListener('abort', abortListener, { once: true });
-  }
-
-  try {
-    const res = await fetchImpl(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    let data = null;
-    try {
-      data = await res.json();
-    } catch {
-      /* non-JSON error body */
-    }
-    return { res, data };
-  } catch (err) {
-    if (controller.signal.aborted) {
-      if (externalSignal?.aborted || controller.signal.reason === 'canceled') {
-        throw new LLMError('Requisicao cancelada pelo jogador.', { kind: 'canceled' });
-      }
-      const secs = Math.round(timeoutMs / 1000);
-      throw new LLMError(
-        `Tempo limite esgotado apos ${secs}s. O modelo esta demorando no Google AI Studio. Aumente o Tempo Limite nas Configuracoes (ex: 180s) ou use 'gemini-3.8-flash' para respostas rapidas.`,
-        { kind: 'timeout' }
-      );
-    }
-    throw new LLMError(`Falha de rede: ${err.message}`, { kind: 'network' });
-  } finally {
-    clearTimeout(timer);
-    if (externalSignal && abortListener) {
-      externalSignal.removeEventListener('abort', abortListener);
-    }
-  }
-}
-
-function mapHttpError(status, data) {
-  const apiMsg = data?.error?.message ?? '';
-  if (status === 400) return new LLMError(`Requisicao invalida (400): ${apiMsg}`, { status, kind: 'bad_request' });
-  if (status === 401 || status === 403) return new LLMError(`Chave de API invalida ou sem permissao (${status}). ${apiMsg}`, { status, kind: 'auth' });
-  if (status === 404) return new LLMError(`Modelo nao encontrado (404). Verifique o nome do modelo. ${apiMsg}`, { status, kind: 'model' });
-  if (status === 429) return new LLMError(`Limite de requisicoes atingido (429). Aguarde e tente novamente. ${apiMsg}`, { status, kind: 'rate_limit' });
-  if (status >= 500) return new LLMError(`Erro no servidor do Gemini (${status}). ${apiMsg}`, { status, kind: 'server' });
-  return new LLMError(`Erro HTTP ${status}. ${apiMsg}`, { status, kind: 'http' });
-}
-
-function extractText(data) {
-  if (data?.promptFeedback?.blockReason) {
-    throw new LLMError(`Prompt bloqueado pelo filtro de seguranca: ${data.promptFeedback.blockReason}`, { kind: 'blocked' });
-  }
-  const cand = data?.candidates?.[0];
-  if (!cand) throw new LLMError('Resposta sem candidatos', { kind: 'empty' });
-  const text = (cand.content?.parts ?? []).filter((p) => !p.thought).map((p) => p.text ?? '').join('');
-  if (!text) {
-    if (cand.finishReason === 'MAX_TOKENS') {
-      throw new LLMError('Geracao interrompida: MAX_TOKENS (raciocinio excedeu o limite de tokens).', { kind: 'finish' });
-    }
-    if (cand.finishReason && cand.finishReason !== 'STOP') {
-      throw new LLMError(`Geracao interrompida: ${cand.finishReason}`, { kind: 'finish' });
-    }
-  }
-  return text;
 }
 
 /**
- * Google Gemini (AI Studio) REST adapter. Called directly from the browser.
- * Supports configurable timeout (120-180s for Gemma) and multi-stage fallback.
+ * Maps HTTP status codes and error payloads to user-friendly PT-BR LLMErrors.
+ * @param {number} status
+ * @param {object|null} data
+ * @returns {LLMError}
  */
-export function createGeminiAdapter({ getSettings, fetchImpl = (...a) => fetch(...a) }) {
-  return {
-    name: 'gemini',
-    getModel() {
-      return getSettings().model || DEFAULT_MODEL;
-    },
-    getTimeoutSeconds() {
-      const settings = getSettings();
-      const isGemma = /gemma/i.test(settings.model || '');
-      return settings.timeoutSeconds ? Number(settings.timeoutSeconds) : (isGemma ? 120 : 60);
-    },
-    async send(request, { signal = null } = {}) {
-      const settings = getSettings();
-      if (!settings.apiKey) throw new LLMError('Configure sua chave de API do Google AI Studio em Configuracoes.', { kind: 'auth' });
-      const model = settings.model || DEFAULT_MODEL;
-      const isGemma = /gemma/i.test(model);
-      const defaultTimeoutMs = isGemma ? 120000 : 60000;
-      const timeoutMs = settings.timeoutSeconds ? Number(settings.timeoutSeconds) * 1000 : defaultTimeoutMs;
-      const url = `${GEMINI_BASE}/models/${encodeURIComponent(model)}:generateContent`;
-      const t0 = performance.now();
+export function mapHttpError(status, data = null) {
+  const apiMsg = data?.error?.message ? ` (${data.error.message})` : '';
 
-      let { res, data } = await postJson(url, buildGeminiBody(request, { ...settings, model }), settings.apiKey, fetchImpl, timeoutMs, signal);
-      // Auto-retry once on transient 500 / 503 Google AI Studio server hiccups
-      if ((res.status === 500 || res.status === 503) && !signal?.aborted) {
-        await new Promise((r) => setTimeout(r, 600));
-        ({ res, data } = await postJson(url, buildGeminiBody(request, { ...settings, model }), settings.apiKey, fetchImpl, timeoutMs, signal));
-      }
-
-      let degraded = false;
-      if (res.status === 400 && !isGemma) {
-        ({ res, data } = await postJson(url, buildGeminiBody(request, { ...settings, model }, { minimal: true }), settings.apiKey, fetchImpl, timeoutMs, signal));
-        degraded = true;
-      }
-      if (res.status === 400) {
-        ({ res, data } = await postJson(url, buildGeminiBody(request, { ...settings, model }, { minimal: true, noMime: true }), settings.apiKey, fetchImpl, timeoutMs, signal));
-        degraded = true;
-      }
-      if (!res.ok) throw mapHttpError(res.status, data);
-      return { text: extractText(data), latencyMs: Math.round(performance.now() - t0), usage: data.usageMetadata ?? null, degraded };
-    },
-  };
-}
-
-/** Lists models available to the key that support generateContent. */
-export async function listGeminiModels(apiKey, fetchImpl = (...a) => fetch(...a)) {
-  const res = await fetchImpl(`${GEMINI_BASE}/models?pageSize=200`, { headers: { 'x-goog-api-key': apiKey } });
-  const data = await res.json().catch(() => null);
-  if (!res.ok) throw mapHttpError(res.status, data);
-  return (data.models ?? [])
-    .filter((m) => (m.supportedGenerationMethods ?? []).includes('generateContent'))
-    .map((m) => m.name.replace(/^models\//, ''));
-}
-
-/* ------------------------------------------------------------------------ */
-/* Mock adapter: keyword-driven, state-aware with complete Enemy GM Turns.  */
-/* ------------------------------------------------------------------------ */
-
-function nearest(list, from) {
-  return [...list].sort((a, b) => manhattan(a, from) - manhattan(b, from))[0] ?? null;
-}
-
-const DIRECTIONS = [
-  { re: /norte|cima|north|up/, dx: 0, dy: -1, pt: 'norte' },
-  { re: /sul|baixo|south|down/, dx: 0, dy: 1, pt: 'sul' },
-  { re: /leste|direita|east|right/, dx: 1, dy: 0, pt: 'leste' },
-  { re: /oeste|esquerda|west|left/, dx: -1, dy: 0, pt: 'oeste' },
-];
-
-export function mockRespond(state, action) {
-  const a = action.toLowerCase().trim();
-  const ents = Object.values(state.entities);
-  const p = state.entities.player;
-  const initialEnemies = ents.filter((e) => e.faction === 'enemy' && e.hp > 0);
-  const commands = [];
-  const narrativeParts = [];
-
-  // Phase 1: Player Action
-  let playerActed = false;
-
-  // Direct tile coordinates (e.g. "mover para (5, 3)" or "5, 3")
-  const coordMatch = a.match(/\(?(\d{1,2})\s*,\s*(\d{1,2})\)?/);
-  if (coordMatch && /andar|mover|ir|passo|tile/.test(a)) {
-    const targetX = parseInt(coordMatch[1], 10);
-    const targetY = parseInt(coordMatch[2], 10);
-    commands.push({ type: 'MOVE', id: 'player', to: { x: targetX, y: targetY } });
-    narrativeParts.push(`Voce se desloca com cuidado ate a coordenada (${targetX}, ${targetY}).`);
-    playerActed = true;
-  } else if (/atac|attack|golpe|lut|mat[ao]|bat[eo]/.test(a)) {
-    const foe = nearest(initialEnemies, p);
-    if (!foe) {
-      narrativeParts.push('Nao ha inimigos a vista para atacar.');
-    } else {
-      if (manhattan(p, foe) !== 1) {
-        commands.push({ type: 'MOVE', id: 'player', target: foe.id });
-      }
-      commands.push({ type: 'ATTACK', attacker: 'player', target: foe.id });
-      narrativeParts.push(`Voce investe com sua arma e golpeia ${foe.name.toLowerCase()}!`);
-    }
-    playerActed = true;
-  } else if (/abr|open|porta|door|ba[uú]|chest/.test(a)) {
-    const wantsDoor = /porta|door/.test(a);
-    const pool = ents.filter((e) => (wantsDoor ? e.kind === 'door' : e.kind === 'chest' || e.kind === 'door') && !e.open);
-    const t = nearest(pool, p);
-    if (!t) {
-      narrativeParts.push('Nao ha objetos fechados ao seu alcance.');
-    } else {
-      if (manhattan(p, t) > 1) {
-        commands.push({ type: 'MOVE', id: 'player', target: t.id });
-      }
-      commands.push({ type: 'INTERACT', actor: 'player', target: t.id });
-      narrativeParts.push(`Voce se aproxima e abre ${t.name.toLowerCase()}.`);
-    }
-    playerActed = true;
-  } else if (/peg|lot|loot|saque|take|colet|recolh/.test(a)) {
-    const pool = ents.filter((e) => (e.kind === 'bag' || e.kind === 'chest') && e.open && e.items.length);
-    const t = nearest(pool, p);
-    if (!t) {
-      narrativeParts.push('Nao ha espolios ou itens abertos para recolher por aqui.');
-    } else {
-      if (manhattan(p, t) > 1) {
-        commands.push({ type: 'MOVE', id: 'player', target: t.id });
-      }
-      commands.push({ type: 'LOOT', actor: 'player', from: t.id });
-      narrativeParts.push(`Voce recolhe os itens de ${t.name.toLowerCase()} para sua bolsa.`);
-    }
-    playerActed = true;
-  } else {
-    const dir = DIRECTIONS.find((d) => d.re.test(a));
-    if (dir) {
-      const to = { x: p.x + dir.dx * 2, y: p.y + dir.dy * 2 };
-      commands.push({ type: 'MOVE', id: 'player', to });
-      narrativeParts.push(`Voce da alguns passos em direcao ao ${dir.pt}.`);
-      playerActed = true;
-    }
+  if (status === 401 || status === 403) {
+    return new LLMError(`Chave de API inválida ou sem permissão (código ${status}). Verifique suas configurações.${apiMsg}`, {
+      kind: 'auth',
+      status
+    });
   }
 
-  if (!playerActed) {
-    narrativeParts.push('O Mestre observa sua hesitacao. Tente comandos diretos como: atacar, abrir porta, saquear bau, ou andar para norte, sul, leste, oeste.');
+  if (status === 404) {
+    return new LLMError(`Modelo não encontrado ou indisponível (código 404). Verifique o nome do modelo nas configurações.${apiMsg}`, {
+      kind: 'model',
+      status
+    });
   }
 
-  // Phase 2: Game Master / Enemy Turn
-  // Enemies act: if adjacent to player, attack; if nearby (<= 4 tiles), advance toward player!
-  const playerDmgDealt = commands.filter((c) => c.type === 'ATTACK' && c.attacker === 'player').length * (p.atk || 4);
-  const targetFoe = commands.find((c) => c.type === 'ATTACK' && c.attacker === 'player')?.target;
-
-  const enemyTurnNarratives = [];
-  for (const enemy of initialEnemies) {
-    const currentHp = enemy.id === targetFoe ? enemy.hp - playerDmgDealt : enemy.hp;
-    if (currentHp <= 0) continue; // Enemy died this turn
-
-    const dist = manhattan(enemy, p);
-    if (dist <= 1 || (commands.some((c) => c.type === 'MOVE' && c.id === 'player') && dist <= 2)) {
-      // Enemy is adjacent: counterattack or attack!
-      commands.push({ type: 'ATTACK', attacker: enemy.id, target: 'player' });
-      enemyTurnNarratives.push(`${enemy.name} ataca voce ferozmente com suas garras!`);
-    } else if (dist <= 4) {
-      // Enemy is nearby: move toward player
-      commands.push({ type: 'MOVE', id: enemy.id, target: 'player' });
-      enemyTurnNarratives.push(`${enemy.name} nota sua presenca e avanca em sua direcao!`);
-    }
+  if (status === 429) {
+    return new LLMError(`Limite de requisições excedido na API Gemini (código 429). Aguarde alguns instantes.${apiMsg}`, {
+      kind: 'rate_limit',
+      status
+    });
   }
 
-  if (enemyTurnNarratives.length > 0) {
-    narrativeParts.push(`[Turno dos Inimigos] ${enemyTurnNarratives.join(' ')}`);
+  if (status === 500 || status === 502 || status === 503 || status === 504) {
+    return new LLMError(`Erro temporário nos servidores do Gemini (código ${status}).${apiMsg}`, {
+      kind: 'server',
+      status
+    });
   }
 
-  return JSON.stringify({
-    narrative: narrativeParts.join(' '),
-    commands,
+  return new LLMError(`Erro na requisição à API Gemini (código ${status}).${apiMsg}`, {
+    kind: 'server',
+    status
   });
 }
 
 /**
- * Mock LLM. Typing "quebrado"/"invalid" returns garbage first so the repair
- * path can be exercised; the repair request gets a valid answer.
+ * Checks if the specified model is a Gemma family model.
+ * @param {string} model
+ * @returns {boolean}
  */
-export function createMockAdapter({ getState, latencyMs = 250 }) {
-  return {
-    name: 'mock',
-    async send(request) {
-      await new Promise((r) => setTimeout(r, latencyMs));
-      const action = request.meta?.action ?? '';
-      if (/quebrad|invalid/i.test(action) && !request.meta?.repair) {
-        return { text: 'Claro! Aqui esta: {"narrative": "resposta quebrada", "commands": [ {"type": "MOVE"', latencyMs };
+export function isGemmaModel(model = '') {
+  return /gemma/i.test(model);
+}
+
+/**
+ * Normalizes input contents into the standard Gemini REST contents structure:
+ * Array of { role: 'user'|'model', parts: [{ text: string }] }
+ * @param {Array} contents
+ * @returns {Array}
+ */
+function normalizeContents(contents = []) {
+  return contents.map((item) => {
+    if (!item) return { role: 'user', parts: [{ text: '' }] };
+    const role = item.role === 'model' ? 'model' : 'user';
+
+    if (Array.isArray(item.parts)) {
+      return {
+        role,
+        parts: item.parts.map((p) => (typeof p === 'string' ? { text: p } : { text: p?.text ?? '' }))
+      };
+    }
+
+    if (typeof item.text === 'string') {
+      return {
+        role,
+        parts: [{ text: item.text }]
+      };
+    }
+
+    return { role, parts: [{ text: '' }] };
+  });
+}
+
+/**
+ * Builds the request body for Gemini REST API generateContent.
+ * Handles Gemma fallback (no systemInstruction or responseSchema).
+ * @param {object} params
+ * @returns {object}
+ */
+function buildRequestBody({ system = '', contents = [], schema = null, settings = {} }) {
+  const model = settings.model || DEFAULT_MODEL;
+  const isGemma = isGemmaModel(model);
+  const normalizedContents = normalizeContents(contents);
+
+  if (isGemma) {
+    // Gemma fallback: prepend system instruction to the first user message
+    const sysPrefix = system ? `${system}\n\nResponda estritamente com o objeto JSON contendo narrative e tool_calls.\n\n` : '';
+    const adaptedContents = [...normalizedContents];
+
+    if (adaptedContents.length > 0) {
+      const first = adaptedContents[0];
+      const existingText = first.parts?.[0]?.text ?? '';
+      adaptedContents[0] = {
+        ...first,
+        parts: [{ text: `${sysPrefix}${existingText}` }]
+      };
+    } else if (sysPrefix) {
+      adaptedContents.push({ role: 'user', parts: [{ text: sysPrefix }] });
+    }
+
+    return {
+      contents: adaptedContents,
+      generationConfig: {
+        temperature: settings.temperature ?? 0.2,
+        maxOutputTokens: settings.maxOutputTokens ?? 2048
       }
-      return { text: mockRespond(getState(), action), latencyMs };
+    };
+  }
+
+  // Standard Gemini configuration with structured outputs
+  const generationConfig = {
+    temperature: settings.temperature ?? 0.2,
+    maxOutputTokens: settings.maxOutputTokens ?? 2048,
+    responseMimeType: 'application/json',
+    responseSchema: schema || RESPONSE_SCHEMA
+  };
+
+  // Thinking configuration for Gemini 2.5 / 3 models
+  if (/2\.5-flash/.test(model)) {
+    generationConfig.thinkingConfig = { thinkingBudget: 0 };
+  } else if (/^gemini-3/.test(model)) {
+    generationConfig.thinkingConfig = { thinkingLevel: 'low' };
+  }
+
+  const body = {
+    contents: normalizedContents,
+    generationConfig
+  };
+
+  if (system && system.trim().length > 0) {
+    body.systemInstruction = { parts: [{ text: system }] };
+  }
+
+  return body;
+}
+
+/**
+ * Creates an LLM client for Gemini REST API.
+ * @param {object} options
+ * @param {Function} [options.getSettings] Function returning current settings
+ * @param {Function} [options.fetchImpl] Fetch implementation (defaults to global fetch)
+ * @returns {{ generate: Function, testConnection: Function }}
+ */
+export function createLlmClient({ getSettings = null, fetchImpl = fetch } = {}) {
+  /**
+   * Generates content from the Gemini API.
+   * @param {object} params
+   * @param {string} [params.system] System prompt
+   * @param {Array} [params.contents] History / turns
+   * @param {object} [params.schema] Optional schema override
+   * @param {AbortSignal} [params.signal] External cancellation signal
+   * @param {object} [params.overrides] Setting overrides
+   * @returns {Promise<{ text: string, finishReason: string, usage: object, latencyMs: number }>}
+   */
+  async function generate({ system = '', contents = [], schema = null, signal = null, overrides = {} } = {}) {
+    const activeSettings = {
+      ...(getSettings ? getSettings() : {}),
+      ...overrides
+    };
+
+    const apiKey = activeSettings.apiKey || '';
+    const model = activeSettings.model || DEFAULT_MODEL;
+    const timeoutMs = activeSettings.timeoutMs ? Number(activeSettings.timeoutMs) : DEFAULT_TIMEOUT_MS;
+    const url = `${GEMINI_BASE}/models/${encodeURIComponent(model)}:generateContent`;
+    const body = buildRequestBody({ system, contents, schema, settings: activeSettings });
+
+    const abortController = new AbortController();
+    let timedOut = false;
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      abortController.abort(new Error('timeout'));
+    }, timeoutMs);
+
+    let onExternalAbort = null;
+    if (signal) {
+      if (signal.aborted) {
+        clearTimeout(timeoutId);
+        throw new LLMError('Requisição cancelada.', { kind: 'canceled' });
+      }
+      onExternalAbort = () => {
+        abortController.abort(new Error('canceled'));
+      };
+      signal.addEventListener('abort', onExternalAbort, { once: true });
+    }
+
+    const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+
+    try {
+      let res = null;
+      let attempt = 0;
+
+      while (attempt < 2) {
+        attempt++;
+        try {
+          res = await fetchImpl(url, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-goog-api-key': apiKey
+            },
+            body: JSON.stringify(body),
+            signal: abortController.signal
+          });
+        } catch (fetchErr) {
+          if (signal?.aborted || abortController.signal.reason?.message === 'canceled') {
+            throw new LLMError('Requisição cancelada.', { kind: 'canceled' });
+          }
+          if (timedOut || abortController.signal.reason?.message === 'timeout' || fetchErr.name === 'AbortError') {
+            throw new LLMError(`Tempo limite esgotado (${timeoutMs / 1000}s) ao aguardar resposta do Mestre de Jogo. Verifique sua conexão ou aumente o limite nas Configurações.`, { kind: 'timeout' });
+          }
+          throw new LLMError(`Falha de conexão com a API Gemini: ${fetchErr.message}`, { kind: 'network', originalError: fetchErr });
+        }
+
+        // Retry once on 429, 500, or 503 if not canceled
+        if (attempt === 1 && (res.status === 429 || res.status === 500 || res.status === 503)) {
+          if (signal?.aborted) {
+            throw new LLMError('Requisição cancelada.', { kind: 'canceled' });
+          }
+
+          let delay = 1500;
+          if (res.status === 429 && res.headers?.get) {
+            const retryHeader = res.headers.get('retry-after');
+            if (retryHeader) {
+              const sec = parseInt(retryHeader, 10);
+              if (!isNaN(sec) && sec > 0) delay = sec * 1000;
+            }
+          }
+
+          await new Promise((resolve, reject) => {
+            const timer = setTimeout(resolve, delay);
+            if (signal) {
+              signal.addEventListener('abort', () => {
+                clearTimeout(timer);
+                reject(new LLMError('Requisição cancelada.', { kind: 'canceled' }));
+              }, { once: true });
+            }
+          });
+
+          continue;
+        }
+
+        break;
+      }
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        throw mapHttpError(res.status, data);
+      }
+
+      if (!data) {
+        throw new LLMError('Resposta vazia recebida da API Gemini.', { kind: 'server', status: res.status });
+      }
+
+      const candidate = data.candidates?.[0];
+      const finishReason = candidate?.finishReason ?? 'STOP';
+
+      if (finishReason === 'SAFETY') {
+        throw new LLMError('A resposta foi bloqueada pelos filtros de segurança do modelo Gemini (SAFETY).', { kind: 'blocked' });
+      }
+
+      if (finishReason === 'MAX_TOKENS') {
+        throw new LLMError('A resposta foi truncada por exceder o limite máximo de tokens (MAX_TOKENS).', { kind: 'truncated' });
+      }
+
+      const text = candidate?.content?.parts?.map((p) => p.text ?? '').join('') ?? '';
+      const usage = data.usageMetadata ?? { promptTokens: 0, outputTokens: 0 };
+      const latencyMs = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0);
+
+      return {
+        text,
+        finishReason,
+        usage,
+        latencyMs
+      };
+    } finally {
+      clearTimeout(timeoutId);
+      if (signal && onExternalAbort) {
+        signal.removeEventListener('abort', onExternalAbort);
+      }
+    }
+  }
+
+  /**
+   * Performs a lightweight connectivity test with the current API key and model.
+   * @returns {Promise<{ ok: boolean, latencyMs: number, error: string|null, kind?: string }>}
+   */
+  async function testConnection() {
+    const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    try {
+      const res = await generate({
+        contents: [{ role: 'user', parts: [{ text: 'ping' }] }],
+        overrides: { timeoutMs: 10000, maxOutputTokens: 10 }
+      });
+      return { ok: true, latencyMs: res.latencyMs, error: null };
+    } catch (err) {
+      const latencyMs = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0);
+      return {
+        ok: false,
+        latencyMs,
+        error: err.message,
+        kind: err.kind ?? 'unknown'
+      };
+    }
+  }
+
+  return {
+    generate,
+    testConnection
+  };
+}
+
+/**
+ * Legacy adapter wrapper for backwards compatibility with test fixtures.
+ * @param {object} opts
+ */
+export function createGeminiAdapter({ getSettings = null, fetchImpl = fetch } = {}) {
+  const client = createLlmClient({ getSettings, fetchImpl });
+  return {
+    name: 'gemini',
+    getTimeoutSeconds() {
+      const s = getSettings ? getSettings() : {};
+      if (s.timeoutSeconds) return Number(s.timeoutSeconds);
+      const isGemma = isGemmaModel(s.model || '');
+      return isGemma ? 120 : (s.timeoutMs ? s.timeoutMs / 1000 : 60);
     },
+    async send(request, { signal } = {}) {
+      const timeoutMs = (request?.overrides?.timeoutMs) || (getSettings?.().timeoutSeconds ? getSettings().timeoutSeconds * 1000 : undefined);
+      const overrides = timeoutMs ? { timeoutMs } : {};
+      return client.generate({
+        system: request.system,
+        contents: request.contents,
+        signal,
+        overrides
+      });
+    }
   };
 }

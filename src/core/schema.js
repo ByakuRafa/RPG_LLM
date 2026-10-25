@@ -236,3 +236,44 @@ export function validateBatch(batch, customTools = null) {
     calls
   };
 }
+
+/**
+ * Gemini responseSchema definition.
+ * arguments is a flat object with every possible field nullable so Gemini
+ * outputs a consistent structure. validateBatch subsequently enforces per-tool constraints.
+ */
+export const RESPONSE_SCHEMA = Object.freeze({
+  type: 'OBJECT',
+  properties: {
+    narrative: { type: 'STRING' },
+    tool_calls: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          name: {
+            type: 'STRING',
+            enum: ['move_character', 'use_ability', 'use_item', 'interact_object', 'check_inventory', 'end_turn']
+          },
+          arguments: {
+            type: 'OBJECT',
+            properties: {
+              character_id: { type: 'STRING',  nullable: true },
+              caster_id:    { type: 'STRING',  nullable: true },
+              target_id:    { type: 'STRING',  nullable: true },
+              ability_id:   { type: 'STRING',  nullable: true },
+              item_id:      { type: 'STRING',  nullable: true },
+              object_id:    { type: 'STRING',  nullable: true },
+              target_x:     { type: 'INTEGER', nullable: true },
+              target_y:     { type: 'INTEGER', nullable: true }
+            }
+          }
+        },
+        required: ['name', 'arguments']
+      }
+    }
+  },
+  required: ['narrative', 'tool_calls']
+});
+
+export const MAX_COMMANDS = CONFIG.MAX_TOOL_CALLS ?? 4;
