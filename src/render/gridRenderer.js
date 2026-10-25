@@ -3,12 +3,23 @@
  * Pure consumer of state & injected animator.
  * Zero DOM (except canvas context & click listener), Zero engine mutation.
  */
-import { CONFIG, TILE } from '../core/config.js';
+import { CONFIG, TILE } from "../core/config.js";
+import { loadSettings } from "../core/settings.js";
+import { CLASSES, CHEST_TOKENS } from "../engine/catalog.js";
 
 const TILE_SIZE = CONFIG.TILE_SIZE || 64;
 
-export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE } = {}) {
-  const ctx = canvas.getContext('2d');
+export const DEFAULT_SPRITE_URLS = Object.freeze([
+  CLASSES.warrior?.tokenUrl,
+  CLASSES.mage?.tokenUrl,
+  CLASSES.rogue?.tokenUrl,
+  CLASSES.goblin?.tokenUrl,
+  CHEST_TOKENS?.closed,
+  CHEST_TOKENS?.opened
+].filter(Boolean));
+
+export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE, getSettings = loadSettings } = {}) {
+  const ctx = canvas.getContext("2d");
   let view = { state: null, activeId: null, reachable: null };
   const visualPos = new Map();     // id -> { x: pixelX, y: pixelY }
   const shakeOffsets = new Map();  // id -> { x: offsetX, y: offsetY }
@@ -16,10 +27,69 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE } = {}) {
   const dyingEntities = new Map(); // id -> entity snapshot
   const activeEffects = [];        // active flashes & floating texts
   const sprites = new Map();
+  const failedSprites = new Set();
+  const loggedFailures = new Set();
 
   function setView(next) {
     view = next;
   }
+
+  /**
+   * Loads sprite images by URL, decodes them, and caches them in sprites Map.
+   * On missing/failed sprites, marks as failed and logs once: [INFO] Sprite ausente: <url>.
+   *
+   * @param {string[]|string} [urls=DEFAULT_SPRITE_URLS]
+   * @returns {Promise<Map<string, HTMLImageElement>>}
+   */
+  async function loadSprites(urls = DEFAULT_SPRITE_URLS) {
+    if (typeof Image === "undefined") {
+      return sprites;
+    }
+
+    const list = Array.isArray(urls) ? urls : [urls];
+    const promises = list.map(async (url) => {
+      if (!url || sprites.has(url) || failedSprites.has(url)) {
+        return;
+      }
+      try {
+        const img = new Image();
+        await new Promise((resolve, reject) => {
+          img.onload = () => resolve();
+          img.onerror = () => reject(new Error("Sprite failed to load: " + url));
+          img.src = url;
+        });
+        if (typeof img.decode === "function") {
+          try {
+            await img.decode();
+          } catch {
+            // Image loaded successfully via onload; decode error is non-fatal
+          }
+        }
+        sprites.set(url, img);
+      } catch (err) {
+        failedSprites.add(url);
+        if (!loggedFailures.has(url)) {
+          loggedFailures.add(url);
+          const msg = `[INFO] Sprite ausente: ${url}`;
+          console.info(msg);
+          if (bus && typeof bus.emit === "function") {
+            bus.emit("log:entry", {
+              level: "INFO",
+              text: msg,
+              source: "RENDER",
+              ts: Date.now()
+            });
+          }
+        }
+      }
+    });
+
+    await Promise.all(promises);
+    return sprites;
+  }
+
+  // Preload default tokens asynchronously
+  loadSprites().catch(() => {});
 
   /* ------------------------------- Drawing ------------------------------- */
 
@@ -33,21 +103,21 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE } = {}) {
         const py = y * tileSize;
 
         if (t === TILE.WALL) {
-          ctx.fillStyle = '#21262d';
+          ctx.fillStyle = "#21262d";
           ctx.fillRect(px, py, tileSize, tileSize);
 
-          ctx.strokeStyle = '#30363d';
+          ctx.strokeStyle = "#30363d";
           ctx.lineWidth = 1;
           ctx.strokeRect(px + 0.5, py + 0.5, tileSize - 1, tileSize - 1);
 
-          ctx.fillStyle = '#161b22';
+          ctx.fillStyle = "#161b22";
           ctx.fillRect(px + 4, py + 4, tileSize - 8, tileSize - 8);
         } else {
           const isEven = (x + y) % 2 === 0;
-          ctx.fillStyle = isEven ? '#0f141c' : '#141923';
+          ctx.fillStyle = isEven ? "#0f141c" : "#141923";
           ctx.fillRect(px, py, tileSize, tileSize);
 
-          ctx.strokeStyle = 'rgba(255, 255, 255, 0.02)';
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.02)";
           ctx.lineWidth = 1;
           ctx.strokeRect(px + 0.5, py + 0.5, tileSize - 1, tileSize - 1);
         }
@@ -58,12 +128,12 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE } = {}) {
   function drawHighlights(reachable) {
     if (!reachable || !(reachable instanceof Map)) return;
 
-    ctx.fillStyle = 'rgba(88, 166, 255, 0.22)';
-    ctx.strokeStyle = 'rgba(88, 166, 255, 0.5)';
+    ctx.fillStyle = "rgba(88, 166, 255, 0.22)";
+    ctx.strokeStyle = "rgba(88, 166, 255, 0.5)";
     ctx.lineWidth = 1.5;
 
     for (const [coordKey] of reachable.entries()) {
-      const [x, y] = coordKey.split(',').map(Number);
+      const [x, y] = coordKey.split(",").map(Number);
       const px = x * tileSize;
       const py = y * tileSize;
 
@@ -75,93 +145,92 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE } = {}) {
   function drawObjects(objects) {
     if (!objects) return;
 
+    const settings = typeof getSettings === "function" ? getSettings() : { useSprites: true };
+    const useSprites = settings?.useSprites !== false;
+
     const list = Array.isArray(objects) ? objects : Object.values(objects);
     for (const obj of list) {
       if (!obj || !obj.position) continue;
       const px = obj.position.x * tileSize;
       const py = obj.position.y * tileSize;
 
-      if (obj.type === 'chest' || obj.kind === 'chest') {
+      if (obj.type === "chest" || obj.kind === "chest") {
+        const isOpened = Boolean(obj.opened || obj.open);
+        const isLocked = Boolean(obj.locked);
+        const chestUrl = isOpened ? CHEST_TOKENS?.opened : CHEST_TOKENS?.closed;
+        const spriteImg = chestUrl ? sprites.get(chestUrl) : null;
+
+        if (useSprites && spriteImg) {
+          ctx.drawImage(spriteImg, px + 4, py + 4, 56, 56);
+          continue;
+        }
+
+        // Vector canvas fallback
         const cx = px + 12;
         const cy = py + 16;
         const cw = tileSize - 24; // 40
         const ch = tileSize - 28; // 36
 
-        const isOpened = !!(obj.opened || obj.open);
-        const isLocked = !!obj.locked;
-
         ctx.save();
 
         if (isOpened) {
-          // Opened chest: faded fill and tilted lid
           ctx.globalAlpha = 0.65;
-          ctx.fillStyle = '#4e342e';
+          ctx.fillStyle = "#4e342e";
           ctx.beginPath();
           ctx.roundRect(cx, cy + 8, cw, ch - 8, 4);
           ctx.fill();
 
-          // Dark interior cavity
-          ctx.fillStyle = '#211714';
+          ctx.fillStyle = "#211714";
           ctx.fillRect(cx + 4, cy + 9, cw - 8, 8);
 
-          // Lid drawn swung back
-          ctx.fillStyle = '#6d4c41';
+          ctx.fillStyle = "#6d4c41";
           ctx.fillRect(cx - 2, cy + 2, cw + 4, 6);
 
-          // Iron bands
-          ctx.fillStyle = '#37474f';
+          ctx.fillStyle = "#37474f";
           ctx.fillRect(cx + 6, cy + 8, 4, ch - 8);
           ctx.fillRect(cx + cw - 10, cy + 8, 4, ch - 8);
         } else {
-          // Closed chest body
-          ctx.fillStyle = '#8d5b28';
+          ctx.fillStyle = "#8d5b28";
           ctx.beginPath();
           ctx.roundRect(cx, cy, cw, ch, 4);
           ctx.fill();
 
-          // Iron bands
-          ctx.fillStyle = '#37474f';
+          ctx.fillStyle = "#37474f";
           ctx.fillRect(cx + 6, cy, 4, ch);
           ctx.fillRect(cx + cw - 10, cy, 4, ch);
 
-          // Lid trim
-          ctx.fillStyle = '#5d4037';
+          ctx.fillStyle = "#5d4037";
           ctx.fillRect(cx, cy + 10, cw, 4);
 
           if (isLocked) {
-            // Locked chest: Padlock glyph (gold body + shackle arc + keyhole)
             const lockX = cx + cw / 2;
             const lockY = cy + 12;
 
-            // Shackle loop (drawn above lock body)
-            ctx.strokeStyle = '#ffe082';
+            ctx.strokeStyle = "#ffe082";
             ctx.lineWidth = 2;
             ctx.beginPath();
             ctx.arc(lockX, lockY, 4, Math.PI, 0, false);
             ctx.stroke();
 
-            // Lock body
-            ctx.fillStyle = '#ffd54f';
+            ctx.fillStyle = "#ffd54f";
             ctx.beginPath();
             ctx.roundRect(lockX - 5, lockY, 10, 8, 2);
             ctx.fill();
-            ctx.strokeStyle = '#ffb300';
+            ctx.strokeStyle = "#ffb300";
             ctx.lineWidth = 1;
             ctx.stroke();
 
-            // Keyhole slot
-            ctx.fillStyle = '#212121';
+            ctx.fillStyle = "#212121";
             ctx.beginPath();
             ctx.arc(lockX, lockY + 3, 1.5, 0, Math.PI * 2);
             ctx.fill();
             ctx.fillRect(lockX - 0.75, lockY + 3, 1.5, 3);
           } else {
-            // Unlocked chest: Padlock removed, clean silver latch
             const latchX = cx + cw / 2 - 4;
             const latchY = cy + 10;
-            ctx.fillStyle = '#cfd8dc';
+            ctx.fillStyle = "#cfd8dc";
             ctx.fillRect(latchX, latchY, 8, 6);
-            ctx.fillStyle = '#90a4ae';
+            ctx.fillStyle = "#90a4ae";
             ctx.fillRect(latchX + 2, latchY + 2, 4, 2);
           }
         }
@@ -182,15 +251,15 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE } = {}) {
     const barY = py + 2;
 
     // Background
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+    ctx.fillStyle = "rgba(0, 0, 0, 0.75)";
     ctx.fillRect(barX, barY, barW, barH);
 
     // Health Fill (green > 50%, amber > 25%, red otherwise)
-    let fillColor = '#f85149';
+    let fillColor = "#f85149";
     if (ratio > 0.5) {
-      fillColor = '#3fb950';
+      fillColor = "#3fb950";
     } else if (ratio > 0.25) {
-      fillColor = '#d29922';
+      fillColor = "#d29922";
     }
 
     const fillW = Math.round(barW * ratio);
@@ -200,13 +269,16 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE } = {}) {
     }
 
     // Border
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.6)';
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.6)";
     ctx.lineWidth = 1;
     ctx.strokeRect(barX - 0.5, barY - 0.5, barW + 1, barH + 1);
   }
 
   function drawTokens(entities) {
     if (!entities) return;
+
+    const settings = typeof getSettings === "function" ? getSettings() : { useSprites: true };
+    const useSprites = settings?.useSprites !== false;
 
     // Render living entities plus any entities undergoing death fade
     const living = Object.values(entities).filter(e => e && e.alive);
@@ -233,32 +305,55 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE } = {}) {
       ctx.save();
       ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
 
-      const tokenSize = 48;
-      const offset = (tileSize - tokenSize) / 2;
-      const tx = pos.x + shake.x + offset;
-      const ty = pos.y + shake.y + offset;
+      const px = pos.x + shake.x;
+      const py = pos.y + shake.y;
 
       // Draw HP Bar above token
-      drawHpBar(e, pos.x + shake.x, pos.y + shake.y);
+      drawHpBar(e, px, py);
 
-      // Token square
-      ctx.fillStyle = e.color || '#FFFFFF';
-      ctx.beginPath();
-      ctx.roundRect(tx, ty, tokenSize, tokenSize, 8);
-      ctx.fill();
+      const tokenUrl = e.tokenUrl || CLASSES[e.classId]?.tokenUrl;
+      const spriteImg = tokenUrl ? sprites.get(tokenUrl) : null;
 
-      // Border
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
+      if (useSprites && spriteImg) {
+        // Rounded clip rendering (Task 3.6)
+        ctx.save();
+        ctx.beginPath();
+        ctx.roundRect(px + 4, py + 4, 56, 56, 10);
+        ctx.clip();
+        ctx.drawImage(spriteImg, px + 4, py + 4, 56, 56);
+        ctx.restore();
 
-      // Centered Initial
-      ctx.fillStyle = '#FFFFFF';
-      ctx.font = 'bold 22px system-ui, -apple-system, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      const initial = e.initial || e.name?.[0] || '?';
-      ctx.fillText(initial, tx + tokenSize / 2, ty + tokenSize / 2 + 1);
+        // 2px class-colored border
+        ctx.save();
+        ctx.strokeStyle = e.color || CLASSES[e.classId]?.color || "#FFFFFF";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.roundRect(px + 4, py + 4, 56, 56, 10);
+        ctx.stroke();
+        ctx.restore();
+      } else {
+        // Colored square fallback with initial letter
+        const tokenSize = 48;
+        const offset = (tileSize - tokenSize) / 2;
+        const tx = px + offset;
+        const ty = py + offset;
+
+        ctx.fillStyle = e.color || "#FFFFFF";
+        ctx.beginPath();
+        ctx.roundRect(tx, ty, tokenSize, tokenSize, 8);
+        ctx.fill();
+
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.3)";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        ctx.fillStyle = "#FFFFFF";
+        ctx.font = "bold 22px system-ui, -apple-system, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        const initial = e.initial || e.name?.[0] || "?";
+        ctx.fillText(initial, tx + tokenSize / 2, ty + tokenSize / 2 + 1);
+      }
 
       ctx.restore();
     }
@@ -268,7 +363,7 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE } = {}) {
     if (!activeId || !entities) return;
 
     const active = entities[activeId];
-    if (!active || !active.alive || active.role !== 'player') return;
+    if (!active || !active.alive || active.role !== "player") return;
 
     const pos = visualPos.get(activeId) || {
       x: (active.position?.x ?? 0) * tileSize,
@@ -298,21 +393,19 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE } = {}) {
       }
 
       ctx.save();
-      if (eff.type === 'flash') {
-        // Red / green damage flash overlay: alpha maxAlpha -> 0
+      if (eff.type === "flash") {
         const alpha = (1 - progress) * (eff.maxAlpha || 0.6);
         ctx.fillStyle = `rgba(${eff.rgb}, ${alpha})`;
         ctx.fillRect(eff.x, eff.y, eff.w, eff.h);
-      } else if (eff.type === 'floatText') {
-        // Floating number rising 20px
+      } else if (eff.type === "floatText") {
         const currentY = eff.startY - (eff.dy || 20) * progress;
         const alpha = 1 - progress * 0.4;
         ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
         ctx.fillStyle = eff.color;
-        ctx.font = 'bold 20px system-ui, -apple-system, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
+        ctx.font = "bold 20px system-ui, -apple-system, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.shadowColor = "rgba(0, 0, 0, 0.8)";
         ctx.shadowBlur = 4;
         ctx.fillText(eff.text, eff.x, currentY);
       }
@@ -322,7 +415,7 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE } = {}) {
 
   function drawGridLines(map) {
     if (!map) return;
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.04)";
     ctx.lineWidth = 1;
     ctx.beginPath();
     for (let x = 0; x <= map.width; x++) {
@@ -340,7 +433,7 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE } = {}) {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     if (!view || !view.state || !view.state.map) {
-      ctx.fillStyle = '#0d1117';
+      ctx.fillStyle = "#0d1117";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       return;
     }
@@ -391,7 +484,6 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE } = {}) {
       function step(now) {
         const elapsed = now - startTime;
         const t = Math.min(1, elapsed / duration);
-        // High frequency shake decaying over duration
         const amplitude = (1 - t) * 5;
         const offsetX = Math.sin(t * Math.PI * 8) * amplitude;
         shakeOffsets.set(id, { x: offsetX, y: 0 });
@@ -436,7 +528,7 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE } = {}) {
     const now = performance.now();
 
     activeEffects.push({
-      type: 'flash',
+      type: "flash",
       x: px,
       y: py,
       w: tileSize,
@@ -449,7 +541,7 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE } = {}) {
 
     if (text) {
       activeEffects.push({
-        type: 'floatText',
+        type: "floatText",
         x: px + tileSize / 2,
         y: py + tileSize / 2,
         startY: py + tileSize / 2,
@@ -467,70 +559,70 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE } = {}) {
   async function playSingleEvent(ev) {
     if (!ev) return;
 
-    if (ev.type === 'move') {
+    if (ev.type === "move") {
       if (ev.from && ev.to) {
         await tweenMove(ev.id, ev.from, ev.to, CONFIG.MOVE_ANIM_MS || 250);
       }
-    } else if (ev.type === 'push') {
+    } else if (ev.type === "push") {
       if (ev.from && ev.to) {
         await tweenMove(ev.id, ev.from, ev.to, 150);
       }
-    } else if (ev.type === 'push_blocked') {
+    } else if (ev.type === "push_blocked") {
       await shakeEntity(ev.id, 80);
-    } else if (ev.type === 'damage') {
+    } else if (ev.type === "damage") {
       const target = view?.state?.entities?.[ev.id];
       const pos = target?.position;
       if (pos) {
         const hitFlashMs = CONFIG.HIT_FLASH_MS || 300;
         await flashAndFloat({
           pos,
-          rgb: '248, 81, 73',
+          rgb: "248, 81, 73",
           maxAlpha: 0.6,
           text: `-${ev.amount ?? 0}`,
-          textColor: '#f85149',
+          textColor: "#f85149",
           duration: hitFlashMs
         });
       }
-    } else if (ev.type === 'heal') {
+    } else if (ev.type === "heal") {
       const target = view?.state?.entities?.[ev.id];
       const pos = target?.position;
       if (pos) {
         const hitFlashMs = CONFIG.HIT_FLASH_MS || 300;
         await flashAndFloat({
           pos,
-          rgb: '63, 185, 80',
+          rgb: "63, 185, 80",
           maxAlpha: 0.4,
           text: `+${ev.amount ?? 0}`,
-          textColor: '#3fb950',
+          textColor: "#3fb950",
           duration: hitFlashMs
         });
       }
-    } else if (ev.type === 'death') {
+    } else if (ev.type === "death") {
       const entity = view?.state?.entities?.[ev.id];
       if (entity) {
         await fadeDeath(ev.id, entity, 300);
       }
-    } else if (ev.type === 'chest_opened') {
+    } else if (ev.type === "chest_opened") {
       const obj = view?.state?.objects?.[ev.objectId];
       if (obj?.position) {
         await flashAndFloat({
           pos: obj.position,
-          rgb: '210, 153, 34',
+          rgb: "210, 153, 34",
           maxAlpha: 0.35,
-          text: '+Espólios',
-          textColor: '#d29922',
+          text: "+Espólios",
+          textColor: "#d29922",
           duration: 200
         });
       }
-    } else if (ev.type === 'unlocked') {
+    } else if (ev.type === "unlocked") {
       const obj = view?.state?.objects?.[ev.objectId];
       if (obj?.position) {
         await flashAndFloat({
           pos: obj.position,
-          rgb: '88, 166, 255',
+          rgb: "88, 166, 255",
           maxAlpha: 0.35,
-          text: 'Destrancado!',
-          textColor: '#58a6ff',
+          text: "Destrancado!",
+          textColor: "#58a6ff",
           duration: 200
         });
       }
@@ -550,7 +642,7 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE } = {}) {
 
   /* --------------------------------- Input --------------------------------- */
 
-  canvas.addEventListener('click', (ev) => {
+  canvas.addEventListener("click", (ev) => {
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
@@ -563,7 +655,7 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE } = {}) {
     const mapH = view?.state?.map?.height || CONFIG.GRID_H || 12;
 
     if (x >= 0 && x < mapW && y >= 0 && y < mapH) {
-      bus?.emit('board:tileClicked', { x, y });
+      bus?.emit("board:tileClicked", { x, y });
     }
   });
 
@@ -580,7 +672,8 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE } = {}) {
   return {
     setView,
     animator,
-    loadSprites: async () => sprites,
+    loadSprites,
+    getSprites: () => sprites,
     destroy: () => { isRunning = false; }
   };
 }

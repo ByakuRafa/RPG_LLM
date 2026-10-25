@@ -101,6 +101,39 @@ export function mountSettingsModal(bus = null) {
             <option value="120000">120 segundos (Modelos Gemma)</option>
           </select>
         </div>
+
+        <!-- Enemy AI Mode -->
+        <div class="form-group">
+          <label class="form-label" for="set-enemy-ai-mode">Inteligência Artificial Inimiga (Goblins):</label>
+          <select id="set-enemy-ai-mode" class="form-select">
+            <option value="HEURISTIC">Heurística Determinística (Rápida, sem API)</option>
+            <option value="LLM">LLM Tática (Gemini 3.8 Flash com fallback automático)</option>
+          </select>
+          <span class="form-hint">No modo LLM, caso ocorra timeout (8s) ou erro de conexão, a criatura executa a heurística determinística.</span>
+        </div>
+
+        <!-- Benchmark Delay -->
+        <div class="form-group">
+          <label class="form-label" for="set-benchmark-delay">Intervalo entre Requisições no Benchmark:</label>
+          <select id="set-benchmark-delay" class="form-select">
+            <option value="0">0 ms (Mínimo, para fake LLM / mock)</option>
+            <option value="1000">1.000 ms (1 segundo)</option>
+            <option value="2000">2.000 ms (2 segundos)</option>
+            <option value="4000">4.000 ms (Recomendado para evitar Rate Limit 429)</option>
+          </select>
+        </div>
+
+        <!-- VTT Sprites Toggle -->
+        <div class="form-group">
+          <label class="form-label">Renderização Visual (Virtual Tabletop):</label>
+          <label class="radio-label">
+            <input type="checkbox" id="set-use-sprites" checked />
+            <div>
+              <strong>Usar Sprites VTT (Tokens PNG e Baús)</strong>
+              <div class="radio-desc">Exibe tokens circulares ilustrados e baús gráficos. Se desmarcado, reverte instantaneamente para quadrados coloridos.</div>
+            </div>
+          </label>
+        </div>
       </div>
 
       <div class="modal-footer">
@@ -125,6 +158,9 @@ export function mountSettingsModal(bus = null) {
   const timeoutSelect = modalEl.querySelector('#set-timeout');
   const testConnBtn = modalEl.querySelector('#btn-test-connection');
   const testResultEl = modalEl.querySelector('#set-test-result');
+  const enemyAiModeSelect = modalEl.querySelector('#set-enemy-ai-mode');
+  const benchDelaySelect = modalEl.querySelector('#set-benchmark-delay');
+  const useSpritesCheckbox = modalEl.querySelector('#set-use-sprites');
 
   function getEffectiveModel() {
     if (modelSelect.value === 'custom') {
@@ -158,6 +194,9 @@ export function mountSettingsModal(bus = null) {
     tempValSpan.textContent = String(tempRange.value);
 
     timeoutSelect.value = String(s.timeoutMs || 30000);
+    if (enemyAiModeSelect) enemyAiModeSelect.value = s.enemyAIMode || 'HEURISTIC';
+    if (benchDelaySelect) benchDelaySelect.value = String(s.benchmarkDelayMs ?? 4000);
+    if (useSpritesCheckbox) useSpritesCheckbox.checked = s.useSprites !== false;
     testResultEl.style.display = 'none';
     testResultEl.textContent = '';
   }
@@ -240,7 +279,10 @@ export function mountSettingsModal(bus = null) {
       model: getEffectiveModel(),
       promptConfig: configRadioB.checked ? 'B' : 'A',
       temperature: parseFloat(tempRange.value),
-      timeoutMs: parseInt(timeoutSelect.value, 10)
+      timeoutMs: parseInt(timeoutSelect.value, 10),
+      enemyAIMode: enemyAiModeSelect ? enemyAiModeSelect.value : 'HEURISTIC',
+      benchmarkDelayMs: benchDelaySelect ? parseInt(benchDelaySelect.value, 10) : 4000,
+      useSprites: useSpritesCheckbox ? useSpritesCheckbox.checked : true
     };
 
     saveSettings(patch);

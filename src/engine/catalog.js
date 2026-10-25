@@ -1,13 +1,58 @@
 /**
- * Game catalogs (classes, abilities, items, hero roster).
+ * Game catalogs (classes, abilities, items, hero roster, token assets).
  * Pure data structures.
  */
 
 export const CLASSES = {
-  warrior: { classId: 'warrior', label: 'Guerreiro', initial: 'W', color: '#E53935', maxHp: 30, maxMp: 4, maxAp: 1, abilities: ['slash', 'shield_bash'] },
-  mage:    { classId: 'mage',    label: 'Mago',      initial: 'M', color: '#1E88E5', maxHp: 18, maxMp: 3, maxAp: 1, abilities: ['firebolt', 'heal_pulse'] },
-  rogue:   { classId: 'rogue',   label: 'Ladino',    initial: 'R', color: '#43A047', maxHp: 22, maxMp: 5, maxAp: 1, abilities: ['backstab', 'lockpick'] },
-  goblin:  { classId: 'goblin',  label: 'Goblin',    initial: 'G', color: '#8D6E63', maxHp: 12, maxMp: 3, maxAp: 1, abilities: ['goblin_strike'] }
+  warrior: {
+    classId: 'warrior',
+    label: 'Guerreiro',
+    initial: 'W',
+    color: '#E53935',
+    maxHp: 30,
+    maxMp: 4,
+    maxAp: 1,
+    abilities: ['slash', 'shield_bash'],
+    tokenUrl: './assets/tokens/warrior_64.png'
+  },
+  mage: {
+    classId: 'mage',
+    label: 'Mago',
+    initial: 'M',
+    color: '#1E88E5',
+    maxHp: 18,
+    maxMp: 3,
+    maxAp: 1,
+    abilities: ['firebolt', 'heal_pulse'],
+    tokenUrl: './assets/tokens/mage_64.png'
+  },
+  rogue: {
+    classId: 'rogue',
+    label: 'Ladino',
+    initial: 'R',
+    color: '#43A047',
+    maxHp: 22,
+    maxMp: 5,
+    maxAp: 1,
+    abilities: ['backstab', 'lockpick'],
+    tokenUrl: './assets/tokens/rogue_64.png'
+  },
+  goblin: {
+    classId: 'goblin',
+    label: 'Goblin',
+    initial: 'G',
+    color: '#8D6E63',
+    maxHp: 12,
+    maxMp: 3,
+    maxAp: 1,
+    abilities: ['goblin_strike'],
+    tokenUrl: './assets/tokens/goblin_64.png'
+  }
+};
+
+export const CHEST_TOKENS = {
+  closed: './assets/tokens/chest_closed_64.png',
+  opened: './assets/tokens/chest_opened_64.png'
 };
 
 /** target: 'enemy' (hostile to caster) | 'ally' (same side, incl. self) | 'object' */

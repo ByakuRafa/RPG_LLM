@@ -1610,3 +1610,52 @@ button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
+
+
+/* ---------------- Hotseat Hand-off Banner (Sprint 4, Task 3.8) ---------------- */
+
+.hotseat-banner {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(0.92);
+  background: rgba(13, 17, 23, 0.94);
+  border: 2px solid var(--accent-gold);
+  border-radius: var(--radius-lg);
+  padding: 16px 32px;
+  color: #ffffff;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-align: center;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.8), 0 0 24px rgba(210, 153, 34, 0.35);
+  z-index: 100;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.22s ease, transform 0.22s cubic-bezier(0.18, 0.89, 0.32, 1.28);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.hotseat-banner.show {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+/* ---------------- Responsive & Projector Layout Polish (Task 3.8) ---------------- */
+
+@media (min-width: 1280px) and (max-width: 1920px) {
+  .vtt-layout {
+    max-width: 1920px;
+    margin: 0 auto;
+  }
+}
+
+@media (max-width: 1279px) {
+  body {
+    overflow-x: auto;
+  }
+  .vtt-layout {
+    min-width: 1280px;
+  }
+}

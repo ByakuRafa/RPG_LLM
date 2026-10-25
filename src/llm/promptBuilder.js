@@ -369,3 +369,107 @@ export function buildRequest({ state, text, tag = null, config = 'B', memory = [
     schema: RESPONSE_SCHEMA
   };
 }
+
+
+/**
+ * Builds the tactical system prompt for monster AI.
+ * @returns {string}
+ */
+export function buildMonsterSystemPrompt() {
+  return `Você é a Inteligência Artificial Tática controlando criaturas e monstros em um RPG de masmorra 12x12.
+Sua missão é controlar o monstro ativo de forma ameaçadora e tática.
+Você NÃO altera o estado do jogo diretamente: você apenas propõe chamadas de ferramentas em "tool_calls" estritamente de acordo com o contrato JSON abaixo. O motor de regras é a autoridade absoluta: ele valida e pode rejeitar qualquer chamada que viole as regras da masmorra.
+
+# REGRAS DO MONSTRO
+1. O monstro só pode agir em seu próprio nome. O identificador do personagem nas ferramentas DEVE ser estritamente o "monster_id" fornecido.
+2. Ações disponíveis:
+   - "move_character": { "character_id": "<monster_id>", "target_x": number, "target_y": number }. O destino DEVE estar na lista "reachable_tiles" do monstro.
+   - "use_ability": { "caster_id": "<monster_id>", "ability_id": "goblin_strike", "target_id": "<hero_id>" }. O alvo DEVE ser um herói adjacente (distância Manhattan = 1). Requer AP >= 1.
+3. Se já houver um herói adjacente, você pode atacá-lo diretamente com "goblin_strike" sem precisar mover.
+4. Se não houver herói adjacente mas houver movimento disponível (MP > 0), mova-se para uma casa em "reachable_tiles" que aproxime o monstro dos heróis. Se após o movimento houver um herói adjacente e ainda restar AP, você pode incluir a chamada de "goblin_strike".
+5. Se nenhuma ação vantajosa ou válida puder ser realizada, retorne "tool_calls": [].
+
+# CONTRATO DE SAÍDA (JSON)
+Sua resposta DEVE ser estritamente um objeto JSON com duas chaves:
+{
+  "narrative": "1 frase concisa em português do Brasil descrevendo o rosnado, movimento ou golpe da criatura.",
+  "tool_calls": [
+    { "name": "move_character", "arguments": { ... } },
+    { "name": "use_ability", "arguments": { ... } }
+  ]
+}`;
+}
+
+/**
+ * Builds a deterministic state snapshot from the perspective of an active monster.
+ * @param {object} state GameState
+ * @param {string} enemyId
+ * @returns {object|null}
+ */
+export function buildMonsterSnapshot(state, enemyId) {
+  const enemy = state?.entities?.[enemyId];
+  if (!enemy || !enemy.position) return null;
+
+  const heroes = Object.values(state?.entities || {})
+    .filter(e => e && e.role === 'player' && e.alive && e.position)
+    .map(h => ({
+      id: h.id,
+      name: h.name,
+      classId: h.classId,
+      position: { x: h.position.x, y: h.position.y },
+      hp: h.hp,
+      maxHp: h.maxHp
+    }));
+
+  const adjacentHeroes = heroes.filter(h =>
+    Math.abs(h.position.x - enemy.position.x) + Math.abs(h.position.y - enemy.position.y) === 1
+  );
+
+  let reachableTiles = [];
+  if (enemy.alive && (enemy.mp ?? 0) > 0) {
+    const reachableMap = computeReachable(state, enemyId, enemy.mp);
+    reachableTiles = Array.from(reachableMap.keys()).map(k => {
+      const [x, y] = k.split(',').map(Number);
+      return { x, y };
+    });
+  }
+
+  return {
+    monster_id: enemyId,
+    name: enemy.name || 'Goblin',
+    position: { x: enemy.position.x, y: enemy.position.y },
+    hp: enemy.hp,
+    maxHp: enemy.maxHp,
+    mp: enemy.mp,
+    ap: enemy.ap,
+    reachable_tiles: reachableTiles,
+    adjacent_heroes: adjacentHeroes,
+    living_heroes: heroes
+  };
+}
+
+/**
+ * Builds the structured request for Gemini API to plan a monster turn.
+ * @param {object} state GameState
+ * @param {string} enemyId
+ * @returns {{ system: string, contents: Array, schema: object }}
+ */
+export function buildMonsterRequest(state, enemyId) {
+  const system = buildMonsterSystemPrompt();
+  const snapshot = buildMonsterSnapshot(state, enemyId);
+  const userText = `ESTADO DO MONSTRO:
+${JSON.stringify(snapshot, null, 2)}
+
+Decida a ação tática para ${snapshot?.name || enemyId} (${enemyId}).`;
+
+  return {
+    system,
+    contents: [
+      {
+        role: 'user',
+        parts: [{ text: userText }]
+      }
+    ],
+    schema: RESPONSE_SCHEMA
+  };
+}

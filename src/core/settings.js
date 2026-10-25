@@ -14,6 +14,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   maxOutputTokens: 2048,
   timeoutMs: 30000,
   enemyAIMode: 'HEURISTIC',      // used in Sprint 4
+  benchmarkDelayMs: 4000,        // used in Sprint 4 (rate limits)
   benchmarkRps: 1,               // 1 req/sec default (rate limits)
   useSprites: true               // used in Sprint 4
 });

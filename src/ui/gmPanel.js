@@ -701,5 +701,5 @@ export function mountGmPanel(rootEl, bus, { getState, store, queue, catalog, fix
     });
   }
 
-  return { updateUI, getSelectedFixtureText, benchPanel };
+  return { updateUI, getSelectedFixtureText, benchPanel, isOpen, toggleDrawer };
 }

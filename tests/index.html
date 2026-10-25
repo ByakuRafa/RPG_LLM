@@ -160,13 +160,18 @@
     <div style="padding: 16px; color: var(--text-muted);">Executando testes automatizados...</div>
   </div>
 
-  <script type="module">
+  <script>
+window.addEventListener("error", e => console.log("WINDOW_ERROR:", e.message, e.filename, e.lineno));
+window.addEventListener("unhandledrejection", e => console.log("WINDOW_REJECTION:", e.reason?.message || e.reason));
+</script>
+<script type="module">
     import { run } from './runner.js';
     import './engine.test.js';
     import './rules.test.js';
     import './llm.test.js';
     import './fixtures.test.js';
     import './evaluator.test.js';
+    import './finalPolish.test.js';
 
     const root = document.getElementById('test-root');
     const res = await run(root);
