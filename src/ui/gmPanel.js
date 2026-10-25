@@ -1,15 +1,31 @@
 /**
- * Human GM Mode Panel (Task 3.15).
+ * Human GM Mode Panel (Task 3.8 / Task 3.15).
  * Developer control panel to bypass LLM and manually push payloads.
+ * Features: Movement, Abilities, Items, Interaction, Inventory, Invalidator Presets & Hash Check.
  * Pure DOM layer, zero direct state mutation.
  */
 import { hashString } from '../core/prng.js';
 import { FIXTURES as DEFAULT_FIXTURES } from '../core/fixtures.js';
-import { CLASSES as DEFAULT_CLASSES, ABILITIES as DEFAULT_ABILITIES } from '../engine/catalog.js';
+import { CLASSES as DEFAULT_CLASSES, ABILITIES as DEFAULT_ABILITIES, ITEMS as DEFAULT_ITEMS } from '../engine/catalog.js';
+import { buildIllegalPresets } from './illegalPresets.js';
 
 export function mountGmPanel(rootEl, bus, { getState, catalog, fixtures = DEFAULT_FIXTURES } = {}) {
   const catClasses = catalog?.CLASSES || DEFAULT_CLASSES;
   const catAbilities = catalog?.ABILITIES || DEFAULT_ABILITIES;
+  const catItems = catalog?.ITEMS || DEFAULT_ITEMS;
+
+  const PRESET_KEYS = [
+    'walk_beyond_mp',
+    'walk_into_wall',
+    'walk_behind_wall',
+    'attack_out_of_range',
+    'wrong_turn',
+    'heal_enemy',
+    'use_missing_item',
+    'use_gold',
+    'loot_far_chest',
+    'double_action'
+  ];
 
   // Build Panel DOM
   rootEl.innerHTML = `
@@ -59,35 +75,102 @@ export function mountGmPanel(rootEl, bus, { getState, catalog, fixtures = DEFAUL
       </div>
     </div>
 
-    <!-- 3. Turn Section -->
+    <!-- 3. Item Section -->
     <div class="gm-section">
-      <h4>3. Controle de Turno</h4>
+      <h4>3. Usar Item</h4>
+      <div class="gm-row">
+        <label style="width:70px; font-size:12px; color:var(--text-muted);">Personagem:</label>
+        <select id="gm-item-char" style="flex:1;"></select>
+      </div>
+      <div class="gm-row">
+        <label style="width:70px; font-size:12px; color:var(--text-muted);">Item:</label>
+        <select id="gm-item-id" style="flex:1;">
+          <option value="health_potion">Poção de Vida (health_potion)</option>
+          <option value="gold_coins">Moedas de Ouro (gold_coins)</option>
+          <option value="mega_elixir">Mega Elixir (mega_elixir - Inválido)</option>
+        </select>
+      </div>
+      <div class="gm-row">
+        <label style="width:70px; font-size:12px; color:var(--text-muted);">Alvo:</label>
+        <select id="gm-item-target" style="flex:1;"></select>
+        <button id="gm-btn-item" class="btn-sm" style="padding:6px 12px; background:var(--accent-green); color:#fff; font-weight:600;">Usar</button>
+      </div>
+    </div>
+
+    <!-- 4. Interact Section -->
+    <div class="gm-section">
+      <h4>4. Interagir com Objeto</h4>
+      <div class="gm-row">
+        <label style="width:70px; font-size:12px; color:var(--text-muted);">Personagem:</label>
+        <select id="gm-obj-char" style="flex:1;"></select>
+      </div>
+      <div class="gm-row">
+        <label style="width:70px; font-size:12px; color:var(--text-muted);">Objeto:</label>
+        <select id="gm-obj-id" style="flex:1;"></select>
+        <button id="gm-btn-interact" class="btn-sm" style="padding:6px 12px; background:var(--accent-gold); color:#fff; font-weight:600;">Interagir</button>
+      </div>
+    </div>
+
+    <!-- 5. Inventory Section -->
+    <div class="gm-section">
+      <h4>5. Consultar Inventário</h4>
+      <div class="gm-row">
+        <label style="width:70px; font-size:12px; color:var(--text-muted);">Personagem:</label>
+        <select id="gm-inv-char" style="flex:1;"></select>
+        <button id="gm-btn-inventory" class="btn-sm" style="padding:6px 12px; background:var(--panel-hover); border:1px solid var(--border); color:var(--text); font-weight:600;">Consultar</button>
+      </div>
+    </div>
+
+    <!-- 6. Illegal Presets Section -->
+    <div class="gm-section">
+      <h4>6. Testes de Validação (Illegal Presets)</h4>
+      <div style="font-size:11px; color:var(--text-dim); margin-bottom:8px;">
+        Dispara cargas ilegais geradas dinamicamente para verificar integridade e rejeição pelo motor.
+      </div>
+      <div id="gm-presets-container" style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
+        <button id="gm-illegal-walk_beyond_mp" class="btn-sm preset-btn" title="Mover além do MP">Mover além do MP</button>
+        <button id="gm-illegal-walk_into_wall" class="btn-sm preset-btn" title="Mover em parede">Entrar em Parede</button>
+        <button id="gm-illegal-walk_behind_wall" class="btn-sm preset-btn" title="Mover atrás de parede (BFS > MP)">Atrás de Parede</button>
+        <button id="gm-illegal-attack_out_of_range" class="btn-sm preset-btn" title="Ataque fora de alcance">Ataque Longe</button>
+        <button id="gm-illegal-wrong_turn" class="btn-sm preset-btn" title="Mover outro herói fora de turno">Fora de Turno</button>
+        <button id="gm-illegal-heal_enemy" class="btn-sm preset-btn" title="Curar inimigo com Pulso de Cura">Curar Inimigo</button>
+        <button id="gm-illegal-use_missing_item" class="btn-sm preset-btn" title="Usar item inexistente (mega_elixir)">Item Fantasma</button>
+        <button id="gm-illegal-use_gold" class="btn-sm preset-btn" title="Usar item não consumível (ouro)">Usar Ouro</button>
+        <button id="gm-illegal-loot_far_chest" class="btn-sm preset-btn" title="Saquear baú distante">Baú Distante</button>
+        <button id="gm-illegal-double_action" class="btn-sm preset-btn" title="Duas habilidades no mesmo batch (Sem AP)">Ação Dupla (AP)</button>
+      </div>
+    </div>
+
+    <!-- 7. Turn Section -->
+    <div class="gm-section">
+      <h4>7. Controle de Turno</h4>
       <div class="gm-row" style="gap:10px;">
         <button id="gm-btn-end-turn" class="btn-sm" style="flex:1; padding:8px 12px; background:var(--panel-hover); color:var(--accent-gold); font-weight:600; border:1px solid var(--border);">Encerrar Turno</button>
         <button id="gm-btn-reset" class="btn-sm" style="padding:8px 12px; background:var(--panel-hover); color:var(--accent-red); border:1px solid var(--border);">Reiniciar</button>
       </div>
     </div>
 
-    <!-- 4. Raw JSON Section -->
+    <!-- 8. Raw JSON Section -->
     <div class="gm-section">
-      <h4>4. Injetor Raw JSON</h4>
+      <h4>8. Injetor Raw JSON</h4>
       <div class="gm-row">
         <label style="width:70px; font-size:12px; color:var(--text-muted);">Fixture:</label>
         <select id="gm-fixture" style="flex:1;">
           <option value="">-- Selecione uma fixture --</option>
         </select>
       </div>
-      <textarea id="gm-raw-json" rows="6" style="width:100%; margin:8px 0; font-family:var(--font-mono); font-size:11px; resize:vertical;"></textarea>
+      <textarea id="gm-raw-json" rows="4" style="width:100%; margin:8px 0; font-family:var(--font-mono); font-size:11px; resize:vertical;"></textarea>
       <div style="display:flex; justify-content:flex-end;">
         <button id="gm-btn-inject" class="btn-sm" style="padding:6px 14px; background:var(--accent-green); color:#fff; font-weight:600;">Injetar Ações</button>
       </div>
     </div>
 
-    <!-- 5. Footer Hashes -->
+    <!-- 9. Footer Hashes & Integrity Status -->
     <div class="gm-section" style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted); line-height:1.8;">
       <div>State Hash: <span id="gm-state-hash" style="color:var(--accent-gold);">--</span></div>
       <div>Map Hash: <span id="gm-map-hash" style="color:var(--accent);">--</span></div>
       <div>Seq: <span id="gm-seq" style="color:var(--text);">0</span></div>
+      <div id="gm-integrity-status" style="display:none; margin-top:8px; padding:6px 8px; border-radius:4px; font-weight:bold; font-size:11px; text-align:center;"></div>
     </div>
   `;
 
@@ -95,28 +178,56 @@ export function mountGmPanel(rootEl, bus, { getState, catalog, fixtures = DEFAUL
   const closeBtn = rootEl.querySelector('#gm-btn-close');
   const toggleBtn = document.getElementById('btn-toggle-gm');
 
+  // Movement
   const moveCharSelect = rootEl.querySelector('#gm-move-char');
   const moveXInput = rootEl.querySelector('#gm-move-x');
   const moveYInput = rootEl.querySelector('#gm-move-y');
   const btnMove = rootEl.querySelector('#gm-btn-move');
 
+  // Ability
   const abCasterSelect = rootEl.querySelector('#gm-ab-caster');
   const abIdSelect = rootEl.querySelector('#gm-ab-id');
   const abTargetSelect = rootEl.querySelector('#gm-ab-target');
   const btnAbility = rootEl.querySelector('#gm-btn-ability');
 
+  // Item
+  const itemCharSelect = rootEl.querySelector('#gm-item-char');
+  const itemIdSelect = rootEl.querySelector('#gm-item-id');
+  const itemTargetSelect = rootEl.querySelector('#gm-item-target');
+  const btnItem = rootEl.querySelector('#gm-btn-item');
+
+  // Interact
+  const objCharSelect = rootEl.querySelector('#gm-obj-char');
+  const objIdSelect = rootEl.querySelector('#gm-obj-id');
+  const btnInteract = rootEl.querySelector('#gm-btn-interact');
+
+  // Inventory
+  const invCharSelect = rootEl.querySelector('#gm-inv-char');
+  const btnInventory = rootEl.querySelector('#gm-btn-inventory');
+
+  // Turns & Inject
   const btnEndTurn = rootEl.querySelector('#gm-btn-end-turn');
   const btnReset = rootEl.querySelector('#gm-btn-reset');
-
   const fixtureSelect = rootEl.querySelector('#gm-fixture');
   const rawJsonTextarea = rootEl.querySelector('#gm-raw-json');
   const btnInject = rootEl.querySelector('#gm-btn-inject');
 
+  // Hashes & Integrity
   const stateHashEl = rootEl.querySelector('#gm-state-hash');
   const mapHashEl = rootEl.querySelector('#gm-map-hash');
   const seqEl = rootEl.querySelector('#gm-seq');
+  const integrityEl = rootEl.querySelector('#gm-integrity-status');
 
-  const actionButtons = [btnMove, btnAbility, btnEndTurn, btnReset, btnInject];
+  // Preset Buttons
+  const presetButtons = {};
+  for (const k of PRESET_KEYS) {
+    presetButtons[k] = rootEl.querySelector(`#gm-illegal-${k}`);
+  }
+
+  const allActionButtons = [
+    btnMove, btnAbility, btnItem, btnInteract, btnInventory,
+    btnEndTurn, btnReset, btnInject, ...Object.values(presetButtons)
+  ].filter(Boolean);
 
   // Drawer Toggle Helpers
   function isOpen() {
@@ -191,6 +302,28 @@ export function mountGmPanel(rootEl, bus, { getState, catalog, fixtures = DEFAUL
     refreshAbilitiesForCaster(abCasterSelect.value, state);
   });
 
+  function setCorruptionWarning(corrupted) {
+    if (!integrityEl) return;
+    if (corrupted) {
+      integrityEl.style.display = 'block';
+      integrityEl.style.background = 'rgba(248, 81, 73, 0.2)';
+      integrityEl.style.color = 'var(--accent-red)';
+      integrityEl.style.border = '1px solid var(--accent-red)';
+      integrityEl.textContent = 'ESTADO CORROMPIDO (Hash alterado após rejeição!)';
+    } else {
+      integrityEl.style.display = 'block';
+      integrityEl.style.background = 'rgba(63, 185, 80, 0.15)';
+      integrityEl.style.color = 'var(--accent-green)';
+      integrityEl.style.border = '1px solid var(--accent-green)';
+      integrityEl.textContent = 'Hash Íntegro ✓';
+      setTimeout(() => {
+        if (integrityEl.textContent.includes('✓')) {
+          integrityEl.style.display = 'none';
+        }
+      }, 3000);
+    }
+  }
+
   // Update State & Hashes
   function updateUI(state) {
     if (!state) return;
@@ -203,40 +336,37 @@ export function mountGmPanel(rootEl, bus, { getState, catalog, fixtures = DEFAUL
     // Characters list (heroes + enemies)
     const entities = Object.values(state.entities || {});
     const aliveList = entities.filter(e => e.alive);
+    const aliveHeroes = aliveList.filter(e => e.role === 'player');
+    const objects = Object.values(state.objects || {});
 
-    // Update Move Char select
-    const prevMoveVal = moveCharSelect.value;
-    moveCharSelect.replaceChildren();
-    for (const e of aliveList) {
-      const opt = document.createElement('option');
-      opt.value = e.id;
-      const roleTag = e.role === 'player' ? 'Herói' : 'Inimigo';
-      opt.textContent = `${e.name} (${roleTag}) — MP: ${e.mp}/${e.maxMp}`;
-      moveCharSelect.appendChild(opt);
-    }
-    if (state.activeId && state.entities[state.activeId]?.alive) {
-      moveCharSelect.value = state.activeId;
-    } else if (prevMoveVal && state.entities[prevMoveVal]?.alive) {
-      moveCharSelect.value = prevMoveVal;
+    // Helper to populate entity selects
+    function populateEntitySelect(selectEl, list, preferId) {
+      if (!selectEl) return;
+      const prevVal = selectEl.value;
+      selectEl.replaceChildren();
+      for (const e of list) {
+        const opt = document.createElement('option');
+        opt.value = e.id;
+        const roleTag = e.role === 'player' ? 'Herói' : 'Inimigo';
+        opt.textContent = `${e.name} (${roleTag}) [HP: ${e.hp}]`;
+        selectEl.appendChild(opt);
+      }
+      if (preferId && list.some(e => e.id === preferId)) {
+        selectEl.value = preferId;
+      } else if (prevVal && list.some(e => e.id === prevVal)) {
+        selectEl.value = prevVal;
+      }
     }
 
-    // Update Ability Caster select
-    const prevCasterVal = abCasterSelect.value;
-    abCasterSelect.replaceChildren();
-    for (const e of aliveList) {
-      const opt = document.createElement('option');
-      opt.value = e.id;
-      opt.textContent = `${e.name} — AP: ${e.ap}/${e.maxAp}`;
-      abCasterSelect.appendChild(opt);
-    }
-    const currentCaster = (state.activeId && state.entities[state.activeId]?.alive)
-      ? state.activeId
-      : (prevCasterVal || aliveList[0]?.id);
-    abCasterSelect.value = currentCaster;
-    refreshAbilitiesForCaster(currentCaster, state);
+    // 1. Move
+    populateEntitySelect(moveCharSelect, aliveList, state.activeId);
 
-    // Update Ability Targets select (entities + objects)
-    const prevTargetVal = abTargetSelect.value;
+    // 2. Ability Caster & Target
+    populateEntitySelect(abCasterSelect, aliveList, state.activeId);
+    refreshAbilitiesForCaster(abCasterSelect.value || state.activeId, state);
+
+    // Target select includes alive entities + objects
+    const prevAbTarget = abTargetSelect.value;
     abTargetSelect.replaceChildren();
     for (const e of aliveList) {
       const opt = document.createElement('option');
@@ -244,19 +374,42 @@ export function mountGmPanel(rootEl, bus, { getState, catalog, fixtures = DEFAUL
       opt.textContent = `${e.name} (${e.position.x},${e.position.y}) [HP: ${e.hp}]`;
       abTargetSelect.appendChild(opt);
     }
-    const objects = Object.values(state.objects || {});
     for (const obj of objects) {
       const opt = document.createElement('option');
       opt.value = obj.id;
       opt.textContent = `${obj.label || (obj.type === 'chest' ? 'Baú' : obj.id)} (${obj.position.x},${obj.position.y})`;
       abTargetSelect.appendChild(opt);
     }
-    if (prevTargetVal && (state.entities[prevTargetVal]?.alive || state.objects[prevTargetVal])) {
-      abTargetSelect.value = prevTargetVal;
+    if (prevAbTarget && (state.entities[prevAbTarget]?.alive || state.objects[prevAbTarget])) {
+      abTargetSelect.value = prevAbTarget;
     }
+
+    // 3. Item Char & Target
+    populateEntitySelect(itemCharSelect, aliveHeroes, state.activeId);
+    populateEntitySelect(itemTargetSelect, aliveList, state.activeId);
+
+    // 4. Object Interact
+    populateEntitySelect(objCharSelect, aliveHeroes, state.activeId);
+    const prevObjVal = objIdSelect.value;
+    objIdSelect.replaceChildren();
+    for (const obj of objects) {
+      const opt = document.createElement('option');
+      opt.value = obj.id;
+      const lockStatus = obj.locked ? 'Trancado' : (obj.opened ? 'Aberto' : 'Destrancado');
+      opt.textContent = `${obj.label || 'Baú'} (${obj.id}) [${lockStatus}]`;
+      objIdSelect.appendChild(opt);
+    }
+    if (prevObjVal && state.objects?.[prevObjVal]) {
+      objIdSelect.value = prevObjVal;
+    }
+
+    // 5. Inventory
+    populateEntitySelect(invCharSelect, aliveHeroes, state.activeId);
   }
 
-  // Button Handlers
+  // --- Button Handlers ---
+
+  // 1. Move
   btnMove?.addEventListener('click', () => {
     const charId = moveCharSelect.value;
     const targetX = parseInt(moveXInput.value, 10);
@@ -285,6 +438,7 @@ export function mountGmPanel(rootEl, bus, { getState, catalog, fixtures = DEFAUL
     });
   });
 
+  // 2. Ability
   btnAbility?.addEventListener('click', () => {
     const casterId = abCasterSelect.value;
     const abilityId = abIdSelect.value;
@@ -313,6 +467,127 @@ export function mountGmPanel(rootEl, bus, { getState, catalog, fixtures = DEFAUL
     });
   });
 
+  // 3. Item
+  btnItem?.addEventListener('click', () => {
+    const charId = itemCharSelect.value;
+    const itemId = itemIdSelect.value;
+    const targetId = itemTargetSelect.value;
+
+    if (!charId || !itemId || !targetId) {
+      bus?.emit('log:entry', {
+        level: 'REJECTED',
+        text: '[REJECTED] Parâmetros de item incompletos.',
+        source: 'HUMAN_GM',
+        ts: Date.now()
+      });
+      return;
+    }
+
+    bus?.emit('intent:enqueue', {
+      source: 'HUMAN_GM',
+      tool_calls: [{
+        name: 'use_item',
+        arguments: {
+          character_id: charId,
+          item_id: itemId,
+          target_id: targetId
+        }
+      }]
+    });
+  });
+
+  // 4. Interact
+  btnInteract?.addEventListener('click', () => {
+    const charId = objCharSelect.value;
+    const objId = objIdSelect.value;
+
+    if (!charId || !objId) {
+      bus?.emit('log:entry', {
+        level: 'REJECTED',
+        text: '[REJECTED] Parâmetros de interação incompletos.',
+        source: 'HUMAN_GM',
+        ts: Date.now()
+      });
+      return;
+    }
+
+    bus?.emit('intent:enqueue', {
+      source: 'HUMAN_GM',
+      tool_calls: [{
+        name: 'interact_object',
+        arguments: {
+          character_id: charId,
+          object_id: objId
+        }
+      }]
+    });
+  });
+
+  // 5. Inventory
+  btnInventory?.addEventListener('click', () => {
+    const charId = invCharSelect.value;
+    if (!charId) return;
+
+    bus?.emit('intent:enqueue', {
+      source: 'HUMAN_GM',
+      tool_calls: [{
+        name: 'check_inventory',
+        arguments: {
+          character_id: charId
+        }
+      }]
+    });
+  });
+
+  // 6. Illegal Presets Buttons
+  for (const key of PRESET_KEYS) {
+    const btn = presetButtons[key];
+    if (!btn) continue;
+
+    btn.addEventListener('click', () => {
+      const state = typeof getState === 'function' ? getState() : null;
+      if (!state) return;
+
+      const presets = buildIllegalPresets(state);
+      const preset = presets[key];
+      if (!preset || !preset.batch) {
+        bus?.emit('log:entry', {
+          level: 'REJECTED',
+          text: `[REJECTED] Preset ${key} indisponível para o estado atual.`,
+          source: 'HUMAN_GM',
+          ts: Date.now()
+        });
+        return;
+      }
+
+      // Capture before hash
+      const beforeHash = hashString(JSON.stringify(state));
+
+      // Listen for batch completion to verify hash integrity
+      const onBatchDone = (result) => {
+        bus?.off('queue:batchDone', onBatchDone);
+        const afterState = typeof getState === 'function' ? getState() : null;
+        const afterHash = hashString(JSON.stringify(afterState));
+
+        // If batch had ZERO applied calls, the state MUST NOT be mutated
+        if (result && Array.isArray(result.applied) && result.applied.length === 0) {
+          if (afterHash !== beforeHash) {
+            setCorruptionWarning(true);
+          } else {
+            setCorruptionWarning(false);
+          }
+        }
+      };
+      bus?.on('queue:batchDone', onBatchDone);
+
+      bus?.emit('intent:enqueue', {
+        source: 'HUMAN_GM',
+        ...preset.batch
+      });
+    });
+  }
+
+  // 7. Turns
   btnEndTurn?.addEventListener('click', () => {
     const state = typeof getState === 'function' ? getState() : null;
     const activeId = state?.activeId || moveCharSelect.value;
@@ -333,6 +608,7 @@ export function mountGmPanel(rootEl, bus, { getState, catalog, fixtures = DEFAUL
     bus?.emit('intent:reset', { seed: state?.seed });
   });
 
+  // 8. Raw JSON Inject
   btnInject?.addEventListener('click', () => {
     const raw = rawJsonTextarea.value.trim();
     if (!raw) return;
@@ -356,7 +632,7 @@ export function mountGmPanel(rootEl, bus, { getState, catalog, fixtures = DEFAUL
 
   // Action Buttons Disabled on Queue Busy
   bus?.on('queue:busy', (busy) => {
-    for (const btn of actionButtons) {
+    for (const btn of allActionButtons) {
       if (btn) btn.disabled = !!busy;
     }
   });

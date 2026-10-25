@@ -1,222 +1,165 @@
 /**
- * Chat component: Narrative feed, player input, action suggestions,
- * GM thinking state and input history.
+ * Chat component (Task 3.6).
+ * Pre-LLM chat feed, active tag badge [Tag Ativa: ...], Esc/clear handling,
+ * and safe textContent-only rendering.
+ * Pure DOM layer, zero direct state mutation.
  */
-export function createChat({ container, bus, onSendAction, onCancelAction }) {
-  container.innerHTML = `
-    <div class="chat-header">
-      <div class="chat-title-group">
-        <span class="chat-title">Cronica da Masmorra</span>
-        <span class="chat-status-indicator" id="chat-status-indicator"></span>
+
+export function mountChat(rootEl, bus) {
+  let currentTag = null;
+  let isLocked = false;
+
+  rootEl.innerHTML = `
+    <div class="chat-wrapper">
+      <div class="chat-header">
+        <span class="chat-title">Crônica da Masmorra</span>
+        <span class="chat-status-indicator" id="chat-status-indicator">Pronto</span>
       </div>
-      <button class="chat-clear-btn" id="chat-clear-btn" title="Limpar historico da tela">Limpar</button>
-    </div>
-    <div class="chat-log" id="chat-log"></div>
-    <div class="chat-suggestions" id="chat-suggestions">
-      <button class="chip-btn" data-action="Abrir porta">Abrir porta</button>
-      <button class="chip-btn" data-action="Atacar goblin">Atacar goblin</button>
-      <button class="chip-btn" data-action="Saquear bau">Saquear bau</button>
-      <button class="chip-btn" data-action="Ir para o norte">Norte</button>
-      <button class="chip-btn" data-action="Ir para o sul">Sul</button>
-      <button class="chip-btn" data-action="Ir para o leste">Leste</button>
-      <button class="chip-btn" data-action="Ir para o oeste">Oeste</button>
-    </div>
-    <div class="chat-input-wrapper">
-      <form class="chat-form" id="chat-form">
-        <input
-          type="text"
+      <div id="chat-history" class="chat-history"></div>
+      <div id="chat-tag-badge" class="chat-tag-badge" style="display: none;">
+        <span id="chat-tag-text" class="tag-badge-text"></span>
+        <button type="button" id="chat-tag-clear" class="tag-badge-close" title="Remover tag ativa (Esc)">✕</button>
+      </div>
+      <form id="chat-form" class="chat-form">
+        <textarea
           id="chat-input"
           class="chat-input"
-          placeholder="Acao em linguagem natural ou clique no mapa... (Ex: 'atacar goblin', 'norte', 'abrir porta')"
-          autocomplete="off"
-        />
-        <button type="submit" id="chat-send-btn" class="chat-send-btn">Enviar</button>
+          placeholder="Ação em linguagem natural... (ex: 'atacar goblin', 'beber poção')"
+          rows="2"
+        ></textarea>
+        <button type="submit" id="chat-send" class="chat-send-btn">Enviar</button>
       </form>
-      <div class="chat-thinking-badge" id="chat-thinking-badge" style="display: none;">
-        <div class="chat-thinking-content">
-          <span class="spinner"></span>
-          <span id="chat-thinking-text">O Mestre esta pensando... (0s)</span>
-        </div>
-        <button type="button" id="chat-cancel-btn" class="chat-thinking-cancel-btn" title="Cancelar espera">Cancelar</button>
-      </div>
     </div>
   `;
 
-  const logEl = container.querySelector('#chat-log');
-  const formEl = container.querySelector('#chat-form');
-  const inputEl = container.querySelector('#chat-input');
-  const sendBtn = container.querySelector('#chat-send-btn');
-  const thinkingEl = container.querySelector('#chat-thinking-badge');
-  const thinkingTextEl = container.querySelector('#chat-thinking-text');
-  const cancelBtn = container.querySelector('#chat-cancel-btn');
-  const suggestionsEl = container.querySelector('#chat-suggestions');
-  const clearBtn = container.querySelector('#chat-clear-btn');
+  const historyEl = rootEl.querySelector('#chat-history');
+  const tagBadgeEl = rootEl.querySelector('#chat-tag-badge');
+  const tagTextEl = rootEl.querySelector('#chat-tag-text');
+  const tagClearBtn = rootEl.querySelector('#chat-tag-clear');
+  const formEl = rootEl.querySelector('#chat-form');
+  const inputEl = rootEl.querySelector('#chat-input');
+  const sendBtn = rootEl.querySelector('#chat-send');
+  const statusEl = rootEl.querySelector('#chat-status-indicator');
 
-  let thinkingTimer = null;
-  let thinkingSeconds = 0;
-  let thinkingModel = '';
-
-  const history = [];
-  let historyIdx = -1;
-
-  function appendEntry({ text, type = 'narrative', source = 'gm' }) {
-    const entry = document.createElement('div');
-    entry.className = `chat-entry ${type} source-${source}`;
-
-    let badge = 'MESTRE';
-    if (type === 'player') badge = 'VOCÊ';
-    else if (source === 'mock') badge = 'MOCK GM';
-    else if (source === 'system') badge = 'SISTEMA';
-    else if (source === 'human_gm') badge = 'HUMAN GM';
-
-    entry.innerHTML = `
-      <div class="entry-meta">
-        <span class="entry-badge">${badge}</span>
-        <span class="entry-time">${new Date().toLocaleTimeString()}</span>
-      </div>
-      <div class="entry-text">${escapeHtml(text)}</div>
-    `;
-    logEl.appendChild(entry);
-    logEl.scrollTop = logEl.scrollHeight;
-  }
-
-  function escapeHtml(str) {
-    return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
-  }
-
-  function updateThinkingText() {
-    if (!thinkingTextEl) return;
-    const isGemma = /gemma/i.test(thinkingModel);
-    let note = '';
-    if (thinkingSeconds >= 45 && isGemma) {
-      note = ' - Gemma 4 pode levar ate 90s no Google AI Studio...';
-    } else if (thinkingSeconds >= 20) {
-      note = ' - aguardando geracao...';
+  function setLocked(locked) {
+    isLocked = locked;
+    inputEl.disabled = locked;
+    sendBtn.disabled = locked;
+    if (statusEl) {
+      statusEl.textContent = locked ? 'Aguardando...' : 'Pronto';
+      statusEl.className = `chat-status-indicator ${locked ? 'busy' : 'ready'}`;
     }
-    thinkingTextEl.textContent = `O Mestre esta pensando... (${thinkingSeconds}s${note})`;
   }
 
-  function setBusy(busy, meta = {}) {
-    inputEl.disabled = busy;
-    sendBtn.disabled = busy;
-    suggestionsEl.querySelectorAll('.chip-btn').forEach((b) => (b.disabled = busy));
+  function clearTag() {
+    currentTag = null;
+    tagBadgeEl.style.display = 'none';
+    tagTextEl.textContent = '';
+    bus?.emit('ui:tagSelected', null);
+  }
 
-    if (thinkingTimer) {
-      clearInterval(thinkingTimer);
-      thinkingTimer = null;
-    }
-
-    if (busy) {
-      thinkingSeconds = 0;
-      thinkingModel = meta?.model || '';
-      updateThinkingText();
-      thinkingEl.style.display = 'flex';
-      thinkingTimer = setInterval(() => {
-        thinkingSeconds++;
-        updateThinkingText();
-      }, 1000);
+  function setTag(tag) {
+    if (tag && tag.id) {
+      currentTag = tag;
+      tagBadgeEl.style.display = 'inline-flex';
+      tagTextEl.textContent = `[Tag Ativa: ${tag.id}]`;
     } else {
-      thinkingEl.style.display = 'none';
-      inputEl.focus();
+      currentTag = null;
+      tagBadgeEl.style.display = 'none';
+      tagTextEl.textContent = '';
     }
   }
 
-  cancelBtn.addEventListener('click', () => {
-    bus.emit('gm:cancel');
-    onCancelAction?.();
+  function appendMessage({ role = 'player', author, text }) {
+    const msgEl = document.createElement('div');
+    msgEl.className = `chat-entry chat-role-${role}`;
+
+    const metaEl = document.createElement('div');
+    metaEl.className = 'chat-entry-meta';
+
+    const badgeEl = document.createElement('span');
+    badgeEl.className = `chat-role-badge badge-${role}`;
+    badgeEl.textContent = author || (role === 'player' ? 'Herói' : role === 'gm' ? 'Mestre GM' : 'Sistema');
+
+    const timeEl = document.createElement('span');
+    timeEl.className = 'chat-time';
+    timeEl.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    metaEl.appendChild(badgeEl);
+    metaEl.appendChild(timeEl);
+
+    const bodyEl = document.createElement('div');
+    bodyEl.className = 'chat-entry-body';
+    bodyEl.textContent = text || '';
+
+    msgEl.appendChild(metaEl);
+    msgEl.appendChild(bodyEl);
+
+    historyEl.appendChild(msgEl);
+    historyEl.scrollTop = historyEl.scrollHeight;
+  }
+
+  // Tag Badge UI interactions
+  tagClearBtn.addEventListener('click', () => {
+    clearTag();
   });
 
-  formEl.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const val = inputEl.value.trim();
-    if (!val) return;
-    history.push(val);
-    historyIdx = history.length;
+  inputEl.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') {
+      if (currentTag) {
+        ev.preventDefault();
+        clearTag();
+      }
+    } else if (ev.key === 'Enter' && !ev.shiftKey) {
+      ev.preventDefault();
+      formEl.dispatchEvent(new Event('submit', { cancelable: true }));
+    }
+  });
+
+  // Submit Handler
+  formEl.addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    if (isLocked) return;
+
+    const text = inputEl.value.trim();
+    if (!text && !currentTag) return;
+
+    const submittedTag = currentTag ? { ...currentTag } : null;
+    bus?.emit('chat:submit', { text, tag: submittedTag });
+
     inputEl.value = '';
-    appendEntry({ text: val, type: 'player', source: 'player' });
-    onSendAction(val);
+    clearTag();
   });
 
-  inputEl.addEventListener('keydown', (e) => {
-    if (e.key === 'ArrowUp') {
-      if (historyIdx > 0) {
-        historyIdx--;
-        inputEl.value = history[historyIdx] || '';
-      }
-    } else if (e.key === 'ArrowDown') {
-      if (historyIdx < history.length - 1) {
-        historyIdx++;
-        inputEl.value = history[historyIdx] || '';
-      } else {
-        historyIdx = history.length;
-        inputEl.value = '';
-      }
-    }
+  // Bus Event Listeners
+  bus?.on('ui:tagSelected', (tag) => {
+    setTag(tag);
   });
 
-  suggestionsEl.addEventListener('click', (e) => {
-    const chip = e.target.closest('.chip-btn');
-    if (!chip) return;
-    const action = chip.dataset.action;
-    inputEl.value = action;
-    inputEl.focus();
+  bus?.on('turn:changed', ({ phase }) => {
+    // Auto-clear active tag on turn change
+    setTag(null);
+    setLocked(phase === 'ENEMY');
   });
 
-  clearBtn.addEventListener('click', () => {
-    logEl.innerHTML = '';
+  bus?.on('queue:busy', (busy) => {
+    setLocked(!!busy);
   });
 
-  // Event bus hooks
-  bus.on('narrative', ({ text, source }) => {
-    appendEntry({ text, type: 'narrative', source });
+  // Initial welcome message
+  appendMessage({
+    role: 'gm',
+    author: 'Mestre da Masmorra',
+    text: 'A masmorra aguarda suas decisões. Escolha uma habilidade no HUD ou declare sua ação abaixo.'
   });
 
-  bus.on('gm:thinking', (arg) => {
-    if (typeof arg === 'boolean') {
-      setBusy(arg);
-    } else {
-      setBusy(Boolean(arg?.busy), arg);
-    }
-  });
-
-  bus.on('game:over', ({ status }) => {
-    if (status === 'won') {
-      appendEntry({ text: '[Vitoria] Parabens! Voce derrotou todos os inimigos da masmorra!', type: 'system', source: 'system' });
-    } else if (status === 'lost') {
-      appendEntry({ text: '[Derrota] Suas forcas se esgotaram... Voce sucumbiu a masmorra.', type: 'system', source: 'system' });
-    }
-  });
-
-  // Easy action description from grid clicks!
-  bus.on('grid:select', ({ x, y, entityId }) => {
-    if (entityId) {
-      if (entityId.startsWith('goblin') || entityId.startsWith('skel')) {
-        inputEl.value = `Atacar ${entityId}`;
-      } else if (entityId.startsWith('door')) {
-        inputEl.value = 'Abrir porta';
-      } else if (entityId.startsWith('chest')) {
-        inputEl.value = 'Abrir e saquear bau';
-      } else if (entityId.startsWith('bag')) {
-        inputEl.value = 'Saquear espolio';
-      } else {
-        inputEl.value = `Mover ate (${x}, ${y})`;
-      }
-    } else {
-      inputEl.value = `Mover para (${x}, ${y})`;
-    }
-    inputEl.focus();
-  });
-
-  // Welcome message
-  appendEntry({
-    text: 'Voce adentra os corredores umidos da masmorra abandonada. Uma tocha crepita na parede. A sua frente ha uma porta de madeira fechada e, mais adiante, barulhos guturais de criaturas rondando...',
-    type: 'narrative',
-    source: 'gm',
-  });
-
-  return { appendEntry, setBusy, focus: () => inputEl.focus() };
+  return {
+    appendMessage,
+    clearTag,
+    setLocked,
+    focus: () => inputEl.focus()
+  };
 }
+
+// Backwards compatibility alias
+export const createChat = mountChat;

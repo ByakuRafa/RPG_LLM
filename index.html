@@ -27,16 +27,9 @@
 
     <!-- Side Panel: Chat / Narrative & Activity Log -->
     <section id="side">
-      <div id="chat-panel" class="side-panel-section">
-        <div class="panel-header">
-          <h3>Narrativa & Chat</h3>
-        </div>
-        <div class="panel-content placeholder-text">
-          Aguardando comandos da party...
-        </div>
-      </div>
+      <div id="chat-panel" class="side-panel-section chat-section"></div>
 
-      <div id="activity-log" class="side-panel-section">
+      <div id="activity-log" class="side-panel-section log-section">
         <div class="panel-header">
           <h3>Registro de Atividades</h3>
           <div class="log-actions">
@@ -49,17 +42,23 @@
     </section>
 
     <!-- HUD Footer -->
-    <footer id="hud">
-      <div class="hud-placeholder">
-        HUD Heróis · Painel de Status e Recursos
-      </div>
-    </footer>
+    <footer id="hud"></footer>
 
     <!-- GM Drawer (Collapsible) -->
     <aside id="gm-drawer" class="gm-drawer-collapsed">
       <!-- Human GM Mode injected here -->
     </aside>
   </div>
+
+  <!-- Game Over Modal (Task 3.9) -->
+  <dialog id="overlay-gameover" class="gameover-modal">
+    <div class="gameover-box">
+      <div id="gameover-icon" class="gameover-icon">🏆</div>
+      <h2 id="gameover-title" class="gameover-title">Vitória!</h2>
+      <p id="gameover-desc" class="gameover-desc">Todos os inimigos foram derrotados e a masmorra foi conquistada com honra.</p>
+      <button id="btn-new-game" class="btn-new-game">Novo Jogo</button>
+    </div>
+  </dialog>
 
   <script type="module" src="./src/main.js"></script>
 </body>
