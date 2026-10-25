@@ -10,6 +10,7 @@ export function mountChat(rootEl, bus) {
   let isThinking = false;
   let isQueueLocked = false;
   let isPhaseLocked = false;
+  let isBenchmarking = false;
   let timerInterval = null;
   let secondsThinking = 0;
 
@@ -63,12 +64,15 @@ export function mountChat(rootEl, bus) {
   const statusEl = rootEl.querySelector('#chat-status-indicator');
 
   function updateLockState() {
-    const shouldDisable = isThinking || isQueueLocked || isPhaseLocked;
+    const shouldDisable = isThinking || isQueueLocked || isPhaseLocked || isBenchmarking;
     inputEl.disabled = shouldDisable;
     sendBtn.disabled = shouldDisable;
 
     if (statusEl) {
-      if (isThinking) {
+      if (isBenchmarking) {
+        statusEl.textContent = 'Benchmark Ativo';
+        statusEl.className = 'chat-status-indicator busy';
+      } else if (isThinking) {
         statusEl.textContent = 'Pensando...';
         statusEl.className = 'chat-status-indicator busy';
       } else if (isPhaseLocked) {

@@ -1,3 +1,4 @@
+import { mountBenchmarkPanel } from './benchmarkPanel.js';
 /**
  * Human GM Mode Panel (Task 3.8 / Task 3.15).
  * Developer control panel to bypass LLM and manually push payloads.
@@ -9,7 +10,7 @@ import { FIXTURES as DEFAULT_FIXTURES } from '../core/fixtures.js';
 import { CLASSES as DEFAULT_CLASSES, ABILITIES as DEFAULT_ABILITIES, ITEMS as DEFAULT_ITEMS } from '../engine/catalog.js';
 import { buildIllegalPresets } from './illegalPresets.js';
 
-export function mountGmPanel(rootEl, bus, { getState, catalog, fixtures = DEFAULT_FIXTURES, getGameMaster = null } = {}) {
+export function mountGmPanel(rootEl, bus, { getState, store, queue, catalog, fixtures = DEFAULT_FIXTURES, getGameMaster = null, getSettings = () => ({}) } = {}) {
   const catClasses = catalog?.CLASSES || DEFAULT_CLASSES;
   const catAbilities = catalog?.ABILITIES || DEFAULT_ABILITIES;
   const catItems = catalog?.ITEMS || DEFAULT_ITEMS;
@@ -175,7 +176,10 @@ export function mountGmPanel(rootEl, bus, { getState, catalog, fixtures = DEFAUL
       <pre id="gm-inspect-pre" style="max-height:160px; overflow-y:auto; background:var(--bg-deep); border:1px solid var(--border); border-radius:4px; padding:6px; font-size:10px; line-height:1.4; color:var(--text-muted); font-family:var(--font-mono); white-space:pre-wrap; margin:0;">(Nenhum prompt registrado ainda)</pre>
     </div>
 
-    <!-- 10. Footer Hashes & Integrity Status -->
+    <!-- 10. Academic Benchmark Harness (Task 3.4) -->
+    <div class="gm-section" id="gm-benchmark-section"></div>
+
+    <!-- 11. Footer Hashes & Integrity Status -->
     <div class="gm-section" style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted); line-height:1.8;">
       <div>State Hash: <span id="gm-state-hash" style="color:var(--accent-gold);">--</span></div>
       <div>Map Hash: <span id="gm-map-hash" style="color:var(--accent);">--</span></div>
@@ -685,5 +689,17 @@ export function mountGmPanel(rootEl, bus, { getState, catalog, fixtures = DEFAUL
     updateUI(getState());
   }
 
-  return { updateUI, getSelectedFixtureText };
+  // Mount Benchmark Panel (Sprint 4, Task 3.4)
+  const benchRoot = rootEl.querySelector('#gm-benchmark-section');
+  let benchPanel = null;
+  if (benchRoot) {
+    benchPanel = mountBenchmarkPanel(benchRoot, bus, {
+      store,
+      queue,
+      getGameMaster,
+      getSettings
+    });
+  }
+
+  return { updateUI, getSelectedFixtureText, benchPanel };
 }

@@ -75,10 +75,12 @@ export function createGameMaster({ store, queue, bus = null, llm, getSettings = 
       const rej = trace.batchResult.rejected;
       const rejTool = rej.call?.name || 'ação';
       const rejReason = rej.result?.reason || rej.message || 'Ação inválida pelas regras';
-      bus?.emit('chat:system', {
-        level: 'error',
-        text: `Ação bloqueada pelo motor: ${rejReason}`
-      });
+      if (trace.source !== 'BENCHMARK') {
+        bus?.emit('chat:system', {
+          level: 'error',
+          text: `Ação bloqueada pelo motor: ${rejReason}`
+        });
+      }
       memory.push({
         role: 'user',
         text: `[MOTOR] REJEITADO ${rejTool}: ${rejReason}. Nenhuma ação posterior foi executada.`
@@ -111,19 +113,26 @@ export function createGameMaster({ store, queue, bus = null, llm, getSettings = 
    * @param {boolean} [params.recordPrompt=false]
    * @returns {Promise<object>} Trace object
    */
-  async function handleInput({ text = '', tag = null, recordPrompt = false } = {}) {
+  async function handleInput({
+    text = '',
+    tag = null,
+    source = 'PLAYER',
+    configOverride = null,
+    recordPrompt = false
+  } = {}) {
     const rawText = String(text ?? '').trim();
     const state = store.getState();
     const activeId = state?.activeId;
     const activeHero = state?.entities?.[activeId];
 
     const settings = typeof getSettings === 'function' ? getSettings() : loadSettings();
-    const config = settings?.promptConfig || 'B';
+    const config = configOverride || settings?.promptConfig || 'B';
     const model = settings?.model || 'gemini-3.8-flash';
 
     const trace = {
       config,
       model,
+      source,
       input: {
         text: rawText,
         tag: tag?.id || (typeof tag === 'string' ? tag : null),
@@ -178,11 +187,13 @@ export function createGameMaster({ store, queue, bus = null, llm, getSettings = 
       }
 
       // Attempt 1: Initial generation
+      const overrides = source === 'BENCHMARK' ? { temperature: 0 } : {};
       const res1 = await llm.generate({
         system: req.system,
         contents: req.contents,
         schema: req.schema,
-        signal: controller.signal
+        signal: controller.signal,
+        overrides
       });
 
       trace.latencyMs += res1.latencyMs;
@@ -208,7 +219,8 @@ export function createGameMaster({ store, queue, bus = null, llm, getSettings = 
           system: req.system,
           contents: repairContents,
           schema: req.schema,
-          signal: controller.signal
+          signal: controller.signal,
+          overrides
         });
 
         trace.latencyMs += resRepair.latencyMs;
@@ -237,18 +249,20 @@ export function createGameMaster({ store, queue, bus = null, llm, getSettings = 
           source: 'LLM',
           ts: Date.now()
         });
-        bus?.emit('chat:system', {
-          level: 'error',
-          text: 'O Mestre respondeu em formato inválido e não pôde agir.'
-        });
+        if (source !== 'BENCHMARK') {
+          bus?.emit('chat:system', {
+            level: 'error',
+            text: 'O Mestre respondeu em formato inválido e não pôde agir.'
+          });
+        }
         return trace;
       }
 
       trace.parsed = out.envelope;
       trace.coercedArgs = Boolean(out.flags?.coerced);
 
-      // Emit narrative to chat
-      if (out.envelope?.narrative) {
+      // Emit narrative to chat (skipped during benchmark)
+      if (source !== 'BENCHMARK' && out.envelope?.narrative) {
         bus?.emit('chat:gm', { narrative: out.envelope.narrative });
       }
 
@@ -266,7 +280,7 @@ export function createGameMaster({ store, queue, bus = null, llm, getSettings = 
 
       // Enqueue batch to authoritative ActionQueue
       const batchResult = await queue.enqueue({
-        source: 'LLM',
+        source: source || 'LLM',
         narrative: out.envelope.narrative,
         tool_calls: out.calls
       });
@@ -281,10 +295,12 @@ export function createGameMaster({ store, queue, bus = null, llm, getSettings = 
         source: 'LLM',
         ts: Date.now()
       });
-      if (err.kind === 'canceled') {
-        bus?.emit('chat:system', { level: 'info', text: 'Requisição ao Mestre cancelada.' });
-      } else {
-        bus?.emit('chat:system', { level: 'error', text: `Erro: ${err.message}` });
+      if (source !== 'BENCHMARK') {
+        if (err.kind === 'canceled') {
+          bus?.emit('chat:system', { level: 'info', text: 'Requisição ao Mestre cancelada.' });
+        } else {
+          bus?.emit('chat:system', { level: 'error', text: `Erro: ${err.message}` });
+        }
       }
     } finally {
       controller = null;

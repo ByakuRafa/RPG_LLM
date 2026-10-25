@@ -152,6 +152,8 @@ export function createActionQueue({ store, bus, tools, animator = null, stepDela
     isBusy: () => running,
     clear: () => { jobs.length = 0; },
     setAnimator: a => { animator = a; },
-    setStepDelay: ms => { stepDelayMs = ms; }
+    getAnimator: () => animator,
+    setStepDelay: ms => { stepDelayMs = ms; },
+    getStepDelay: () => stepDelayMs
   };
 }

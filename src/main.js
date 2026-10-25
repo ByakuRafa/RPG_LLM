@@ -131,9 +131,12 @@ export async function boot() {
   if (gmDrawerEl) {
     gmPanel = mountGmPanel(gmDrawerEl, bus, {
       getState: store.getState,
+      store,
+      queue,
       catalog: { CLASSES, ABILITIES, HERO_ROSTER },
       fixtures: FIXTURES,
-      getGameMaster: () => gm
+      getGameMaster: () => gm,
+      getSettings: loadSettings
     });
   }
 

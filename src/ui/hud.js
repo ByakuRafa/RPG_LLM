@@ -282,6 +282,11 @@ export function mountHud(rootEl, bus, { getState } = {}) {
     render({ isBusy });
   });
 
+  bus?.on('hud:disable', (disabled) => {
+    isBusy = !!disabled;
+    render({ isBusy });
+  });
+
   bus?.on('ui:tagSelected', (tag) => {
     selectedTag = tag;
     render({ selectedTag });
