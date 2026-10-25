@@ -1,187 +1,183 @@
 /**
- * Rules engine: state-dependent legality checks. The LLM proposes, the
- * engine disposes. Every check returns either
- *   { ok: true, ...resolution }   (data needed by the reducer, e.g. a path)
- *   { ok: false, reason }         (English, fed back to the LLM next turn)
+ * Game rules validation for tool execution.
+ * Zero DOM, Zero Canvas, 100% pure JS logic.
  */
-import { inBounds, isWall } from './map.js';
-import { KINDS, SPAWNABLE_KINDS, blocksMovement, isContainer, isCreature, isInteractable } from './entities.js';
+import { CONFIG, PHASE } from '../core/config.js';
+import { REJECT } from '../core/messages.js';
+import { inBounds, isWallAt, getBlockerAt, manhattan, computeReachable, key } from './pathfinding.js';
+import { ABILITIES } from './catalog.js';
 
-export const MAX_MOVE = 12;
-
-const fail = (reason) => ({ ok: false, reason });
-const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-
-export function manhattan(a, b) {
-  return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
-}
-
-export function entitiesAt(state, x, y) {
-  return Object.values(state.entities).filter((e) => e.x === x && e.y === y);
-}
-
-export function blockerAt(state, x, y, ignoreId = null) {
-  return entitiesAt(state, x, y).find((e) => e.id !== ignoreId && blocksMovement(e)) ?? null;
-}
-
-function isWalkable(state, x, y, selfId) {
-  return inBounds(state.map, x, y) && !isWall(state.map, x, y) && !blockerAt(state, x, y, selfId);
-}
+const ALLOWED_ENEMY_SOURCES = new Set(['ENEMY_AI', 'HUMAN_GM', 'TEST']);
 
 /**
- * 4-directional BFS. Returns the list of steps (excluding start) to the first
- * tile satisfying `isGoal`, or null when unreachable.
+ * Checks whether the game is currently playable.
+ * @param {object} s GameState
+ * @returns {{ ok: false, code: string, message: string } | null}
  */
-export function findPath(state, start, isGoal, selfId) {
-  const key = (x, y) => `${x},${y}`;
-  const prev = new Map([[key(start.x, start.y), null]]);
-  const queue = [{ x: start.x, y: start.y }];
-  while (queue.length) {
-    const cur = queue.shift();
-    if (isGoal(cur)) {
-      const path = [];
-      let node = cur;
-      while (node && !(node.x === start.x && node.y === start.y)) {
-        path.unshift({ x: node.x, y: node.y });
-        node = prev.get(key(node.x, node.y));
-      }
-      return path;
-    }
-    for (const [dx, dy] of DIRS) {
-      const nx = cur.x + dx;
-      const ny = cur.y + dy;
-      const k = key(nx, ny);
-      if (prev.has(k) || !isWalkable(state, nx, ny, selfId)) continue;
-      prev.set(k, cur);
-      queue.push({ x: nx, y: ny });
-    }
+export function checkPlaying(s) {
+  if (s.phase === PHASE.GAME_OVER || s.gameOver) {
+    return { ok: false, code: 'GAME_OVER', message: REJECT.GAME_OVER() };
   }
   return null;
 }
 
-function requireEntity(state, id, role) {
-  const e = state.entities[id];
-  return e ? null : `${role} "${id}" does not exist`;
-}
+/**
+ * Validates whether an actor can act right now.
+ * - GAME_OVER check
+ * - Actor exists in entities
+ * - Actor is alive
+ * - HERO phase: actor === activeId
+ * - ENEMY phase: actor is an enemy entity and source is allowed
+ *
+ * @param {object} s GameState
+ * @param {string} id Entity ID
+ * @param {object} [ctx] Context including source
+ * @returns {{ ok: false, code: string, message: string } | null}
+ */
+export function checkActor(s, id, ctx = {}) {
+  const playingErr = checkPlaying(s);
+  if (playingErr) return playingErr;
 
-function checkMove(state, cmd) {
-  const err = requireEntity(state, cmd.id, 'entity');
-  if (err) return fail(err);
-  const ent = state.entities[cmd.id];
-  if (!isCreature(ent)) return fail(`"${ent.id}" (${ent.kind}) cannot move`);
-
-  let isGoal;
-  if (cmd.to) {
-    const { x, y } = cmd.to;
-    if (!inBounds(state.map, x, y)) return fail(`(${x},${y}) is out of bounds (map is ${state.map.width}x${state.map.height})`);
-    if (isWall(state.map, x, y)) return fail(`(${x},${y}) is a wall`);
-    const blocker = blockerAt(state, x, y, ent.id);
-    if (blocker) return fail(`(${x},${y}) is occupied by "${blocker.id}"`);
-    if (ent.x === x && ent.y === y) return { ok: true, path: [] };
-    isGoal = (p) => p.x === x && p.y === y;
-  } else {
-    const terr = requireEntity(state, cmd.target, 'target');
-    if (terr) return fail(terr);
-    const target = state.entities[cmd.target];
-    if (target.id === ent.id) return fail('an entity cannot move toward itself');
-    if (manhattan(ent, target) === 1) return { ok: true, path: [] };
-    isGoal = (p) => manhattan(p, target) === 1;
+  const actor = s?.entities?.[id];
+  if (!actor) {
+    return { ok: false, code: 'UNKNOWN_ENTITY', message: REJECT.UNKNOWN_ENTITY({ id }) };
   }
 
-  const path = findPath(state, ent, isGoal, ent.id);
-  const dest = cmd.to ? `(${cmd.to.x},${cmd.to.y})` : `"${cmd.target}"`;
-  if (!path) return fail(`no walkable path from (${ent.x},${ent.y}) to ${dest} (walls, closed doors or blockers in the way)`);
-  if (path.length > MAX_MOVE) return fail(`${dest} is ${path.length} steps away (max ${MAX_MOVE} per MOVE)`);
-  return { ok: true, path };
+  if (!actor.alive || (typeof actor.hp === 'number' && actor.hp <= 0)) {
+    return { ok: false, code: 'ENTITY_DEAD', message: REJECT.ENTITY_DEAD(actor) };
+  }
+
+  if (s.phase === PHASE.HERO) {
+    if (id !== s.activeId) {
+      return { ok: false, code: 'NOT_YOUR_TURN', message: REJECT.NOT_YOUR_TURN(actor) };
+    }
+  } else if (s.phase === PHASE.ENEMY) {
+    const source = ctx?.source || 'HUMAN_GM';
+    if (actor.role !== 'enemy' || !ALLOWED_ENEMY_SOURCES.has(source)) {
+      return { ok: false, code: 'NOT_YOUR_TURN', message: REJECT.NOT_YOUR_TURN(actor) };
+    }
+  } else {
+    return { ok: false, code: 'NOT_YOUR_TURN', message: REJECT.NOT_YOUR_TURN(actor) };
+  }
+
+  return null;
 }
 
-function checkAttack(state, cmd) {
-  const err = requireEntity(state, cmd.attacker, 'attacker') ?? requireEntity(state, cmd.target, 'target');
-  if (err) return fail(err);
-  const a = state.entities[cmd.attacker];
-  const t = state.entities[cmd.target];
-  if (!isCreature(a)) return fail(`"${a.id}" cannot attack`);
-  if (!isCreature(t)) return fail(`"${t.id}" (${t.kind}) cannot be attacked`);
-  if (a.id === t.id) return fail('an entity cannot attack itself');
-  const d = manhattan(a, t);
-  if (d !== 1) return fail(`"${t.id}" at (${t.x},${t.y}) is not adjacent to "${a.id}" at (${a.x},${a.y}) (distance ${d}); MOVE first`);
-  return { ok: true, amount: a.atk };
+/**
+ * Validates move_character action according to Task 3.8 order:
+ * 1. Actor guards
+ * 2. OUT_OF_BOUNDS
+ * 3. SAME_TILE
+ * 4. TARGET_IS_WALL
+ * 5. TARGET_OCCUPIED
+ * 6. NO_MP
+ * 7. TOO_FAR (manhattan > mp)
+ * 8. If BFS mode: reachable check -> UNREACHABLE
+ *
+ * @param {object} s GameState
+ * @param {{ character_id: string, target_x: number, target_y: number }} action
+ * @param {object} [ctx]
+ * @returns {{ ok: boolean, code?: string, message?: string, resolved?: { cost: number } }}
+ */
+export function validateMove(s, { character_id, target_x, target_y }, ctx = {}) {
+  // 1. Actor guards
+  const actorErr = checkActor(s, character_id, ctx);
+  if (actorErr) return actorErr;
+
+  const actor = s.entities[character_id];
+
+  // 2. OUT_OF_BOUNDS
+  if (!inBounds(s.map, target_x, target_y)) {
+    return { ok: false, code: 'OUT_OF_BOUNDS', message: REJECT.OUT_OF_BOUNDS() };
+  }
+
+  // 3. SAME_TILE
+  if (actor.position.x === target_x && actor.position.y === target_y) {
+    return { ok: false, code: 'SAME_TILE', message: REJECT.SAME_TILE() };
+  }
+
+  // 4. TARGET_IS_WALL
+  if (isWallAt(s.map, target_x, target_y)) {
+    return { ok: false, code: 'TARGET_IS_WALL', message: REJECT.TARGET_IS_WALL() };
+  }
+
+  // 5. TARGET_OCCUPIED
+  const blocker = getBlockerAt(s, target_x, target_y, { ignoreId: character_id });
+  if (blocker) {
+    return { ok: false, code: 'TARGET_OCCUPIED', message: REJECT.TARGET_OCCUPIED(blocker) };
+  }
+
+  // 6. NO_MP
+  if (actor.mp <= 0) {
+    return { ok: false, code: 'NO_MP', message: REJECT.NO_MP(actor) };
+  }
+
+  // 7. TOO_FAR (manhattan > mp)
+  const dist = manhattan(actor.position.x, actor.position.y, target_x, target_y);
+  if (dist > actor.mp) {
+    return { ok: false, code: 'TOO_FAR', message: REJECT.TOO_FAR() };
+  }
+
+  // 8. BFS mode check
+  const mode = s.config?.MOVEMENT_MODE || CONFIG.MOVEMENT_MODE || 'BFS';
+  if (mode === 'BFS') {
+    const reachable = computeReachable(s, character_id, actor.mp);
+    const cost = reachable.get(key(target_x, target_y));
+    if (cost === undefined) {
+      return { ok: false, code: 'UNREACHABLE', message: REJECT.UNREACHABLE() };
+    }
+    return { ok: true, resolved: { cost } };
+  } else {
+    return { ok: true, resolved: { cost: dist } };
+  }
 }
 
-function checkDamage(state, cmd) {
-  const err = requireEntity(state, cmd.target, 'target');
-  if (err) return fail(err);
-  if (!isCreature(state.entities[cmd.target])) return fail(`"${cmd.target}" cannot take damage`);
-  return { ok: true, amount: cmd.amount };
+/**
+ * Validates end_turn action (actor guards only).
+ * @param {object} s GameState
+ * @param {{ character_id: string }} action
+ * @param {object} [ctx]
+ * @returns {{ ok: boolean, code?: string, message?: string, resolved?: object }}
+ */
+export function validateEndTurn(s, { character_id }, ctx = {}) {
+  const actorErr = checkActor(s, character_id, ctx);
+  if (actorErr) return actorErr;
+  return { ok: true, resolved: {} };
 }
 
-function checkInteract(state, cmd) {
-  const err = requireEntity(state, cmd.actor, 'actor') ?? requireEntity(state, cmd.target, 'target');
-  if (err) return fail(err);
-  const a = state.entities[cmd.actor];
-  const t = state.entities[cmd.target];
-  if (!isCreature(a)) return fail(`"${a.id}" cannot interact`);
-  if (!isInteractable(t)) return fail(`"${t.id}" (${t.kind}) is not interactable`);
-  const d = manhattan(a, t);
-  if (d > 1) return fail(`"${t.id}" at (${t.x},${t.y}) is not adjacent to "${a.id}" (distance ${d}); MOVE first`);
-  if (t.open) return fail(`"${t.id}" is already open`);
-  return { ok: true };
-}
+/**
+ * Validates use_ability basic action (Sprint 1 subset):
+ * Actor guards, NO_AP, ABILITY_NOT_OWNED, UNKNOWN_TARGET.
+ *
+ * @param {object} s GameState
+ * @param {{ caster_id: string, ability_id: string, target_id: string }} action
+ * @param {object} [ctx]
+ * @returns {{ ok: boolean, code?: string, message?: string, resolved?: { ability: object, target: object } }}
+ */
+export function validateUseAbilityBasic(s, { caster_id, ability_id, target_id }, ctx = {}) {
+  const actorErr = checkActor(s, caster_id, ctx);
+  if (actorErr) return actorErr;
 
-function checkLoot(state, cmd) {
-  const err = requireEntity(state, cmd.actor, 'actor') ?? requireEntity(state, cmd.from, 'source');
-  if (err) return fail(err);
-  const a = state.entities[cmd.actor];
-  const src = state.entities[cmd.from];
-  if (!isCreature(a)) return fail(`"${a.id}" cannot loot`);
-  if (!isContainer(src)) return fail(`"${src.id}" (${src.kind}) is not a container; only chests and loot bags can be looted`);
-  const d = manhattan(a, src);
-  if (d > 1) return fail(`"${src.id}" at (${src.x},${src.y}) is not adjacent to "${a.id}" (distance ${d}); MOVE first`);
-  if (!src.open) return fail(`"${src.id}" is closed; INTERACT with it first`);
-  if (src.items.length === 0) return fail(`"${src.id}" is empty`);
+  const actor = s.entities[caster_id];
+  const ability = ABILITIES[ability_id];
+  const apCost = ability?.apCost ?? 1;
 
-  if (!cmd.item) return { ok: true, items: src.items.map((i) => ({ ...i })) };
-  const found = src.items.find((i) => i.id === cmd.item.id);
-  const available = src.items.map((i) => `${i.id} x${i.qty}`).join(', ');
-  if (!found) return fail(`item "${cmd.item.id}" not found in "${src.id}" (available: ${available})`);
-  const qty = cmd.item.qty ?? found.qty;
-  if (qty > found.qty) return fail(`"${src.id}" only has ${found.qty}x "${found.id}"`);
-  return { ok: true, items: [{ ...found, qty }] };
-}
+  if (actor.ap < apCost) {
+    return { ok: false, code: 'NO_AP', message: REJECT.NO_AP(actor) };
+  }
 
-function checkSpawn(state, cmd) {
-  if (state.entities[cmd.id]) return fail(`id "${cmd.id}" already exists`);
-  if (!KINDS[cmd.kind]) return fail(`unknown kind "${cmd.kind}" (allowed: ${SPAWNABLE_KINDS.join(', ')})`);
-  if (!SPAWNABLE_KINDS.includes(cmd.kind)) return fail(`kind "${cmd.kind}" cannot be spawned`);
-  const { x, y } = cmd.at;
-  if (!inBounds(state.map, x, y)) return fail(`(${x},${y}) is out of bounds`);
-  if (isWall(state.map, x, y)) return fail(`(${x},${y}) is a wall`);
-  const blocker = blockerAt(state, x, y);
-  if (blocker) return fail(`(${x},${y}) is occupied by "${blocker.id}"`);
-  return { ok: true };
-}
+  if (!actor.abilities || !actor.abilities.includes(ability_id)) {
+    return {
+      ok: false,
+      code: 'ABILITY_NOT_OWNED',
+      message: REJECT.ABILITY_NOT_OWNED({ abilityId: ability_id, name: actor.name })
+    };
+  }
 
-function checkDespawn(state, cmd) {
-  const err = requireEntity(state, cmd.id, 'entity');
-  if (err) return fail(err);
-  if (cmd.id === 'player') return fail('the player cannot be despawned');
-  return { ok: true };
-}
+  const target = s?.entities?.[target_id] || s?.objects?.[target_id];
+  if (!target) {
+    return { ok: false, code: 'UNKNOWN_TARGET', message: REJECT.UNKNOWN_TARGET({ targetId: target_id }) };
+  }
 
-const CHECKS = {
-  MOVE: checkMove,
-  ATTACK: checkAttack,
-  DAMAGE: checkDamage,
-  INTERACT: checkInteract,
-  LOOT: checkLoot,
-  SPAWN: checkSpawn,
-  DESPAWN: checkDespawn,
-};
-
-/** Legality check for one structurally valid command against the current state. */
-export function checkCommand(state, cmd) {
-  if (state.status !== 'playing') return fail(`game is over (${state.status}); no further commands are accepted`);
-  const check = CHECKS[cmd.type];
-  if (!check) return fail(`unknown command type "${cmd.type}"`);
-  return check(state, cmd);
+  return { ok: true, resolved: { ability, target } };
 }
