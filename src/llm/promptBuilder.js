@@ -1,218 +1,371 @@
 /**
- * Builds provider-agnostic requests: { system, contents:[{role, text}], meta }.
- * Structural instructions are in English (better rule-following); the model
- * is explicitly told to write "narrative" in Brazilian Portuguese.
+ * Prompt Builder for LLM Game Master (Sprint 3, Task 3.4).
+ * Generates system prompts (Config A vs B), deterministic state snapshots,
+ * and structured Gemini API requests.
+ *
+ * Ground Rules: Pure JS, zero DOM, zero Canvas, zero Math.random(), never mutates state.
  */
-import { MAX_COMMANDS } from '../core/schema.js';
-import { MAX_MOVE } from '../engine/rules.js';
-import { SPAWNABLE_KINDS } from '../engine/entities.js';
+import { RESPONSE_SCHEMA } from '../core/schema.js';
+import { CLASSES, ABILITIES, ITEMS } from '../engine/catalog.js';
+import { computeReachable } from '../engine/pathfinding.js';
+import { toAscii } from '../engine/mapGenerator.js';
 
-export const HISTORY_TURNS = 6;
+export { RESPONSE_SCHEMA };
 
-export const SYSTEM_PROMPT = `You are the GAME MASTER of a turn-based, grid-based dungeon RPG.
-The player describes an action in natural language (usually Portuguese). You decide what happens and reply with ONE JSON object that a deterministic game engine executes.
+/**
+ * Builds the system prompt for the Game Master.
+ * Config A: Role + Tool Contract + Rules.
+ * Config B: Adds spatial reasoning guidance and 3 PT-BR few-shot examples.
+ *
+ * @param {'A'|'B'} [config='B']
+ * @returns {string}
+ */
+export function buildSystemPrompt(config = 'B') {
+  const isB = config === 'B';
 
-# OUTPUT FORMAT (MANDATORY)
-Reply with JSON only. No markdown, no code fences, no text outside the JSON.
+  const roleBlock = `Você é o Mestre de Jogo de um RPG tático por turnos em uma masmorra 12x12.
+Escreva o campo "narrative" SEMPRE em português do Brasil, contendo de 1 a 3 frases imersivas e concisas descrevendo a ação do herói ativo e a reação do ambiente ou criaturas.
+Você NÃO altera o estado do jogo diretamente: você apenas propõe "tool_calls" estritamente de acordo com o contrato JSON abaixo. O motor de regras é a autoridade absoluta: ele valida e pode rejeitar qualquer chamada que viole as regras da masmorra.`;
+
+  const contractBlock = `# CONTRATO DE SAÍDA (JSON)
+Sua resposta DEVE ser estritamente um objeto JSON com duas chaves:
 {
-  "narrative": string,   // 1-3 short sentences, second person, written in BRAZILIAN PORTUGUESE (pt-BR). NO EMOJIS.
-  "commands": Command[]  // 0..${MAX_COMMANDS} commands, executed strictly in order
+  "narrative": "Frase em português descrevendo os acontecimentos...",
+  "tool_calls": [
+    {
+      "name": "<nome_da_ferramenta>",
+      "arguments": { ... }
+    }
+  ]
 }
 
-# LANGUAGE & STYLE (STRICT)
-- "narrative" MUST be written in Brazilian Portuguese (pt-BR), immersive, concise and natural.
-- STRICT: DO NOT USE ANY EMOJIS anywhere in the response.
-- All JSON keys, command types and entity ids stay in English as specified.
+# FERRAMENTAS DISPONÍVEIS E REGRAS:
+1. move_character:
+   - Argumentos: { "character_id": string, "target_x": integer, "target_y": integer }
+   - Move o herói ativo até as coordenadas (target_x, target_y).
+   - O custo em pontos de movimento (MP) é a distância de passos pelo caminho livre de obstáculos.
+   - Convenção de coordenadas: x de 0 a 11 (leste = x+1, oeste = x-1), y de 0 a 11 (norte = y-1, sul = y+1).
+   - Paredes (#) e outras criaturas vivas bloqueiam movimento.
 
-# COORDINATES
-- x = column (0 = left), y = row (0 = top). Movement is 4-directional (no diagonals).
-- "Adjacent" means Manhattan distance exactly 1 (up, down, left or right).
+2. use_ability:
+   - Argumentos: { "caster_id": string, "ability_id": string, "target_id": string (opcional), "target_x": integer (opcional), "target_y": integer (opcional) }
+   - Custa 1 AP (Pontos de Ação). O conjurador DEVE ser o herói ativo.
+   - A habilidade deve pertencer à classe do herói ativo e o alvo deve estar dentro do alcance (range) e com linha de visão.
+   - Habilidades ofensivas (slash, shield_bash, firebolt, backstab) exigem alvo inimigo vivo.
+   - Habilidades de cura (heal_pulse) exigem alvo aliado vivo (ou o próprio conjurador).
+   - Habilidades de objeto (lockpick) exigem alvo baú adjacente.
 
-# COMMANDS (use only these, with exactly these fields)
-- {"type":"MOVE","id":"<entity>","target":"<entity>"}  -> engine walks <id> to the nearest free tile adjacent to <target>. PREFER THIS FORM.
-- {"type":"MOVE","id":"<entity>","to":{"x":int,"y":int}} -> walk to an exact free floor tile. Use "to" OR "target", never both.
-- {"type":"ATTACK","attacker":"<entity>","target":"<entity>"} -> attacker must be adjacent; engine applies damage = attacker ATK. Do NOT add a DAMAGE command for an ATTACK.
-- {"type":"DAMAGE","target":"<entity>","amount":int} -> direct damage from the environment (traps, falling rocks). Use rarely.
-- {"type":"INTERACT","actor":"<entity>","target":"<entity>"} -> open a closed door or chest. Actor must be adjacent.
-- {"type":"LOOT","actor":"<entity>","from":"<container>"} -> take everything from an OPEN chest or a loot bag. Optional "item":{"id":"<item id>","qty":int} to take one item.
-- {"type":"SPAWN","id":"<new unique id>","kind":"${SPAWNABLE_KINDS.join('|')}","at":{"x":int,"y":int}} -> only when the story truly demands it; max 1 per turn.
-- {"type":"DESPAWN","id":"<entity>"} -> remove an entity from the map (never the player).
+3. use_item:
+   - Argumentos: { "character_id": string, "item_id": string, "target_id": string (opcional, padrão = character_id) }
+   - Consome 1 unidade do item do inventário do herói ativo. Não custa AP nem MP.
 
-# ENGINE RULES (the engine rejects illegal commands; plan around them)
-- Walls (#), closed doors and creatures block movement. Open doors and loot bags do not.
-- A MOVE may cover at most ${MAX_MOVE} steps. Use only ids that exist in the CURRENT STATE.
-- To attack/interact/loot something that is not adjacent, first emit MOVE with "target", then the action.
-- Chests must be opened with INTERACT before LOOT. Defeated creatures drop a loot bag "bag_<id>" if they carried items.
-- When a creature reaches 0 HP the engine removes it automatically. Do NOT DESPAWN it yourself.
-- If the player asks for something impossible or outside these mechanics, narrate why it fails and return "commands": [].
-- One player intent per turn.
+4. interact_object:
+   - Argumentos: { "character_id": string, "object_id": string }
+   - Interage com um objeto adjacente (distância Manhattan = 1), como abrir um baú destrancado.
 
-# TWO-PHASE TURN EXECUTION (MANDATORY ENEMY GM TURN)
-Every turn MUST resolve in two phases inside the "commands" list:
-Phase 1 (Player Action): Commands for what the player does (move, attack, open, loot).
-Phase 2 (Enemy / GM Turn): Every living, active enemy acts:
-  - If the enemy is adjacent to the player (or became adjacent after player's move), it MUST ATTACK the player:
-    {"type":"ATTACK","attacker":"<enemy_id>","target":"player"}
-  - If the enemy is within 4 tiles of the player and not adjacent, it MUST MOVE toward the player:
-    {"type":"MOVE","id":"<enemy_id>","target":"player"}
-  - (Exception: if the enemy dies during the player's attack this turn, do not emit its attack).
-Describe both the player's action and the enemy's retaliation in the narrative.
+5. check_inventory:
+   - Argumentos: { "character_id": string }
+   - Consulta o inventário do herói ativo. Ação livre.
 
-# REJECTION FEEDBACK
-If the state lists rejected commands from last turn, do not repeat the same mistake.
+6. end_turn:
+   - Argumentos: { "character_id": string }
+   - Encerra o turno do herói ativo.
+   - REGRA CRÍTICA: NUNCA chame end_turn a menos que o jogador peça explicitamente para passar ou encerrar a vez.
 
-# EXAMPLES
-Player: "Abro a porta"   (player adjacent to door_1)
-{"narrative":"Voce empurra a porta pesada, que se abre com um rangido longo nos gonzos.","commands":[{"type":"INTERACT","actor":"player","target":"door_1"}]}
+# RESTRIÇÕES GERAIS:
+- Use APENAS IDs existentes no ESTADO fornecido (ex: "hero_warrior", "goblin_1", "chest_1").
+- No máximo 4 tool_calls por resposta.
+- APENAS o herói ativo ("active_character") pode agir.
+- Se o pedido do jogador for impossível ou violar as regras (ex: tentar atravessar paredes, atacar sem alcance, gastar AP sem ter, mover sem MP suficiente), retorne "tool_calls": [] e explique cordialmente na "narrative" a razão da impossibilidade física ou tática.`;
 
-Player: "Ataco o goblin"   (goblin_1 is 3 tiles away, HP 8, player ATK 4, goblin ATK 2)
-{"narrative":"Voce avanca e atinge o goblin no braco. [Turno do Inimigo] Furioso com o golpe, o goblin revida com sua adaga e atinge voce!","commands":[{"type":"MOVE","id":"player","target":"goblin_1"},{"type":"ATTACK","attacker":"player","target":"goblin_1"},{"type":"ATTACK","attacker":"goblin_1","target":"player"}]}
-
-Player: "Pego o que tem no bau"   (chest_1 adjacent and already open)
-{"narrative":"Voce recolhe com rapidez o conteudo do bau e guarda em sua bolsa.","commands":[{"type":"LOOT","actor":"player","from":"chest_1"}]}
-
-Player: "Eu tento voar"
-{"narrative":"Voce tenta saltar no ar, mas a gravidade o mantem firme no piso de pedra. Nada acontece.","commands":[]}`;
-
-const GLYPHS = { player: 'P', goblin: 'g', skeleton: 's', chest: 'C', door: 'D', bag: 'b' };
-
-function glyphFor(e) {
-  const g = GLYPHS[e.kind] ?? '?';
-  if ((e.kind === 'chest' || e.kind === 'door') && e.open) return g.toLowerCase();
-  return g;
-}
-
-/** ASCII map with coordinates and entity glyphs. */
-export function renderAsciiMap(state) {
-  const { map } = state;
-  const rows = map.tiles.map((r) => r.split(''));
-  const ordered = Object.values(state.entities).sort((a, b) => (a.kind === 'bag') - (b.kind === 'bag')).reverse();
-  for (const e of ordered) rows[e.y][e.x] = glyphFor(e);
-  const header = '   ' + Array.from({ length: map.width }, (_, x) => x % 10).join('');
-  const body = rows.map((r, y) => String(y).padStart(2, ' ') + ' ' + r.join(''));
-  return [header, ...body].join('\n');
-}
-
-function describeEntity(e) {
-  const parts = [`${e.id}`, `kind=${e.kind}`, `pos=(${e.x},${e.y})`];
-  if (typeof e.hp === 'number') parts.push(`hp=${e.hp}/${e.maxHp}`, `atk=${e.atk}`);
-  if (e.open !== undefined && e.kind !== 'bag') parts.push(e.open ? 'open' : 'closed');
-  if (e.items && e.id !== 'player' && (e.kind !== 'chest' || e.open)) {
-    parts.push(`items=[${e.items.map((i) => `${i.id} x${i.qty}`).join(', ')}]`);
-  }
-  if (e.kind === 'chest' && !e.open) parts.push('items=unknown until opened');
-  return '- ' + parts.join(' | ');
-}
-
-/** Compact, LLM-readable snapshot of the authoritative game state. */
-export function renderStateSnapshot(state) {
-  const player = state.entities.player;
-  const inv = player?.items?.length ? player.items.map((i) => `${i.id} x${i.qty} (${i.name})`).join(', ') : 'empty';
-  return [
-    `TURN: ${state.turn} | STATUS: ${state.status}`,
-    'MAP (legend: # wall, . floor, P player, g goblin, s skeleton, C closed chest, c open chest, D closed door, d open door, b loot bag):',
-    renderAsciiMap(state),
-    'ENTITIES:',
-    ...Object.values(state.entities).map(describeEntity),
-    `PLAYER INVENTORY: ${inv}`,
-  ].join('\n');
-}
-
-function extractNarrative(rawJson) {
-  try {
-    const parsed = typeof rawJson === 'string' ? JSON.parse(rawJson) : rawJson;
-    return parsed?.narrative || '';
-  } catch {
-    return '';
-  }
-}
-
-function describeRejections(rejections) {
-  if (!rejections?.length) return 'none';
-  return rejections.map((r) => `- ${JSON.stringify(r.cmd)} -> ${r.reason}`).join('\n');
-}
-
-export function buildTurnMessage({ state, history = [], action, rejections }) {
-  const recent = (history || []).slice(-3);
-  const recentEvents = recent.length
-    ? [
-        'RECENT TURNS CONTEXT:',
-        ...recent.map((h) => {
-          const narr = extractNarrative(h.response);
-          return `- Action: "${h.action}"${narr ? ` -> Narrative: "${narr}"` : ''}`;
-        }),
-        '',
-      ].join('\n')
+  const spatialBlock = isB
+    ? `
+# ORIENTAÇÃO ESPACIAL E TÁTICA (CONFIG B):
+- Escolha coordenadas de destino para move_character ESTRITAMENTE a partir da lista "reachable_tiles" do ESTADO.
+- Para realizar uma investida de mover e atacar no mesmo turno, consulte "attack_positions": ela indica posições alcançáveis de onde o herói terá alcance suficiente para atingir o inimigo desejado.
+- Se "selected_ui_tag" estiver preenchido no ESTADO, priorize o uso daquela habilidade ou item indicado pela interface.`
     : '';
 
-  return [
-    'CURRENT STATE:',
-    renderStateSnapshot(state),
-    '',
-    recentEvents,
-    'REJECTED COMMANDS FROM LAST TURN:',
-    describeRejections(rejections),
-    '',
-    `PLAYER ACTION: "${action}"`,
-    '',
-    'Reply with the JSON object only.',
-  ].filter(Boolean).join('\n');
+  const fewShotBlock = isB
+    ? `
+# EXEMPLOS DE COMPORTAMENTO (POUCOS DISPAROS):
+Exemplo 1 (Mover + Atacar):
+Jogador: "Ando até o goblin e corto ele"
+{
+  "narrative": "Thorin avança com bravura pelo corredor de pedra e golpeia o goblin com sua lâmina afiada.",
+  "tool_calls": [
+    {
+      "name": "move_character",
+      "arguments": { "character_id": "hero_warrior", "target_x": 2, "target_y": 8 }
+    },
+    {
+      "name": "use_ability",
+      "arguments": { "caster_id": "hero_warrior", "ability_id": "slash", "target_id": "goblin_1" }
+    }
+  ]
+}
+
+Exemplo 2 (Contextual / Cura):
+Jogador: "Estou ferido, quero me curar"
+{
+  "narrative": "Sentindo o peso dos ferimentos, Lyra canaliza energia luminosa para restaurar suas forças vitais.",
+  "tool_calls": [
+    {
+      "name": "use_ability",
+      "arguments": { "caster_id": "hero_mage", "ability_id": "heal_pulse", "target_id": "hero_mage" }
+    }
+  ]
+}
+
+Exemplo 3 (Recusa / Impossível):
+Jogador: "Atravesso a parede e mato todos os goblins"
+{
+  "narrative": "Paredes de pedra sólida não podem ser atravessadas e você possui energia para apenas uma ação principal neste turno.",
+  "tool_calls": []
+}`
+    : '';
+
+  return [roleBlock, contractBlock, spatialBlock, fewShotBlock].filter(Boolean).join('\n\n');
 }
 
 /**
- * @param {{state: object, history: Array<{action: string, response: string}>, action: string, rejections?: Array}} p
+ * Formats ability effect into friendly PT-BR description.
+ * @param {object} spec
+ * @returns {string}
  */
-export function buildRequest({ state, history = [], action, rejections = [] }) {
-  const userText = buildTurnMessage({ state, history, action, rejections });
-  return { system: SYSTEM_PROMPT, contents: [{ role: 'user', text: userText }], meta: { action, repair: false } };
+function describeAbilityEffect(spec) {
+  if (!spec?.effect) return '';
+  const eff = spec.effect;
+  if (eff.type === 'damage') {
+    return `${eff.amount} de dano${eff.push ? `, empurra ${eff.push}` : ''}`;
+  }
+  if (eff.type === 'heal') {
+    return `+${eff.amount} PV em aliado`;
+  }
+  if (eff.type === 'unlock') {
+    return 'destranca baú adjacente';
+  }
+  return eff.type;
 }
 
-/** Appends the invalid answer + validation errors so the model can fix it. */
-export function buildRepairRequest(request, rawText, errors) {
+/**
+ * Generates an ASCII representation of the 12x12 map with entities stamped.
+ * @param {object} state
+ * @returns {string[]} Array of 12 strings
+ */
+export function buildMapAscii(state) {
+  return toAscii(state);
+}
+
+/**
+ * Builds a deterministic state snapshot object for LLM consumption.
+ *
+ * @param {object} state
+ * @param {'A'|'B'} [config='B']
+ * @returns {object}
+ */
+export function buildStateSnapshot(state, config = 'B') {
+  const activeId = state?.activeId;
+  const activeHero = state?.entities?.[activeId];
+
+  // Abilities of active hero
+  const heroAbilities = (activeHero?.abilities || []).map((abId) => {
+    const spec = ABILITIES[abId] || { id: abId, label: abId, range: 1 };
+    return {
+      id: abId,
+      name: spec.label || abId,
+      range: spec.range ?? 1,
+      effect: describeAbilityEffect(spec)
+    };
+  });
+
+  const activeCharObj = activeHero
+    ? {
+        id: activeHero.id,
+        name: activeHero.name,
+        class: activeHero.classId,
+        position: { x: activeHero.position.x, y: activeHero.position.y },
+        hp: activeHero.hp,
+        max_hp: activeHero.maxHp,
+        mp: activeHero.mp,
+        ap: activeHero.ap,
+        abilities: heroAbilities
+      }
+    : null;
+
+  // Party members (all other heroes sorted by ID)
+  const party = Object.values(state?.entities || {})
+    .filter((e) => e.role === 'hero' && e.id !== activeId)
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map((h) => ({
+      id: h.id,
+      name: h.name,
+      class: h.classId,
+      position: { x: h.position.x, y: h.position.y },
+      hp: h.hp,
+      max_hp: h.maxHp,
+      alive: Boolean(h.alive)
+    }));
+
+  // Enemies (living enemies sorted by ID)
+  const enemies = Object.values(state?.entities || {})
+    .filter((e) => e.role === 'enemy' && e.alive)
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map((e) => ({
+      id: e.id,
+      name: e.name,
+      position: { x: e.position.x, y: e.position.y },
+      hp: e.hp,
+      max_hp: e.maxHp
+    }));
+
+  // Objects (sorted by ID)
+  const objects = Object.values(state?.objects || {})
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map((o) => ({
+      id: o.id,
+      type: o.type,
+      position: { x: o.position.x, y: o.position.y },
+      locked: Boolean(o.locked),
+      opened: Boolean(o.opened)
+    }));
+
+  // Inventory (sorted by ID)
+  const inventory = (activeHero?.inventory || [])
+    .slice()
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map((item) => ({
+      id: item.id,
+      qty: item.qty,
+      usable: Boolean(ITEMS[item.id]?.usable)
+    }));
+
+  // Snapshot Base (Configs A & B)
+  const snapshot = {
+    round: state?.round ?? 1,
+    active_character: activeCharObj,
+    party,
+    enemies,
+    objects,
+    inventory,
+    map_ascii: buildMapAscii(state),
+    player_text_pt: '',
+    selected_ui_tag: null
+  };
+
+  // Config B: Spatial pre-computations
+  if (config === 'B' && activeHero && activeHero.alive) {
+    // 1. reachable_tiles
+    const reachableMap = computeReachable(state, activeHero.id, activeHero.mp);
+    const reachable_tiles = [];
+    for (const [k, cost] of reachableMap.entries()) {
+      if (cost <= activeHero.mp) {
+        const [x, y] = k.split(',').map(Number);
+        reachable_tiles.push([x, y, cost]);
+      }
+    }
+    // Deterministic sort: cost asc, y asc, x asc
+    reachable_tiles.sort((a, b) => a[2] - b[2] || a[1] - b[1] || a[0] - b[0]);
+    snapshot.reachable_tiles = reachable_tiles;
+
+    // 2. enemy_distances & in_range_now
+    const enemy_distances = enemies.map((enemy) => {
+      const manhattan = Math.abs(enemy.position.x - activeHero.position.x) + Math.abs(enemy.position.y - activeHero.position.y);
+      const in_range_now = {};
+      for (const ab of heroAbilities) {
+        in_range_now[ab.id] = manhattan <= ab.range;
+      }
+      return {
+        id: enemy.id,
+        manhattan,
+        in_range_now
+      };
+    });
+    snapshot.enemy_distances = enemy_distances;
+
+    // 3. attack_positions: { [ability_id]: { [enemy_id]: [[x, y, cost], ...] } }
+    const attack_positions = {};
+    for (const ab of heroAbilities) {
+      const abSpec = ABILITIES[ab.id];
+      if (abSpec?.target === 'enemy') {
+        attack_positions[ab.id] = {};
+        for (const enemy of enemies) {
+          const tilesThatReach = reachable_tiles.filter(([x, y]) => {
+            const dist = Math.abs(x - enemy.position.x) + Math.abs(y - enemy.position.y);
+            return dist <= ab.range;
+          });
+          if (tilesThatReach.length > 0) {
+            attack_positions[ab.id][enemy.id] = tilesThatReach;
+          }
+        }
+      }
+    }
+    snapshot.attack_positions = attack_positions;
+
+    // 4. adjacent_objects
+    const adjacent_objects = objects.filter((o) => {
+      const dist = Math.abs(o.position.x - activeHero.position.x) + Math.abs(o.position.y - activeHero.position.y);
+      return dist <= 1;
+    });
+    snapshot.adjacent_objects = adjacent_objects;
+  }
+
+  return snapshot;
+}
+
+/**
+ * Builds the user turn text block with snapshot and player input.
+ * @param {object} params
+ * @param {object} params.state
+ * @param {string} params.text
+ * @param {object|string|null} [params.tag]
+ * @param {'A'|'B'} [params.config='B']
+ * @returns {string}
+ */
+export function buildUserTurn({ state, text, tag = null, config = 'B' }) {
+  const snapshot = buildStateSnapshot(state, config);
+  snapshot.player_text_pt = text;
+  snapshot.selected_ui_tag = tag?.id || (typeof tag === 'string' ? tag : null);
+
+  const activeHero = state?.entities?.[state?.activeId];
+  const heroName = activeHero?.name || 'Herói';
+  const tagStr = snapshot.selected_ui_tag ? `
+[Tag Ativa: ${snapshot.selected_ui_tag}]` : '';
+
+  return `ESTADO:
+${JSON.stringify(snapshot, null, 2)}
+
+JOGADOR (${heroName}): ${text}${tagStr}`;
+}
+
+/**
+ * Builds the complete structured request for Gemini API.
+ * @param {object} params
+ * @param {object} params.state
+ * @param {string} params.text
+ * @param {object|string|null} [params.tag]
+ * @param {'A'|'B'} [params.config='B']
+ * @param {Array} [params.memory=[]]
+ * @returns {{ system: string, contents: Array, schema: object }}
+ */
+export function buildRequest({ state, text, tag = null, config = 'B', memory = [] }) {
+  const system = buildSystemPrompt(config);
+  const userText = buildUserTurn({ state, text, tag, config });
+
+  const contents = [
+    ...memory.map((m) => ({
+      role: m.role,
+      parts: [{ text: m.text }]
+    })),
+    {
+      role: 'user',
+      parts: [{ text: userText }]
+    }
+  ];
+
   return {
-    ...request,
-    contents: [
-      ...request.contents,
-      { role: 'model', text: rawText || '(empty response)' },
-      {
-        role: 'user',
-        text: `Your previous reply was INVALID and nothing was executed. Errors:\n${errors.map((e) => `- ${e}`).join('\n')}\nReturn ONLY the corrected JSON object following the contract exactly.`,
-      },
-    ],
-    meta: { ...request.meta, repair: true },
+    system,
+    contents,
+    schema: RESPONSE_SCHEMA
   };
 }
-
-/**
- * Gemini responseSchema (OpenAPI subset). Commands use a flat object with an
- * enum "type"; per-type requirements are enforced by core/schema.js.
- */
-export const RESPONSE_SCHEMA = {
-  type: 'OBJECT',
-  properties: {
-    narrative: { type: 'STRING' },
-    commands: {
-      type: 'ARRAY',
-      items: {
-        type: 'OBJECT',
-        properties: {
-          type: { type: 'STRING', enum: ['SPAWN', 'MOVE', 'ATTACK', 'DAMAGE', 'INTERACT', 'LOOT', 'DESPAWN'] },
-          id: { type: 'STRING' },
-          kind: { type: 'STRING' },
-          at: { type: 'OBJECT', properties: { x: { type: 'INTEGER' }, y: { type: 'INTEGER' } }, required: ['x', 'y'] },
-          to: { type: 'OBJECT', properties: { x: { type: 'INTEGER' }, y: { type: 'INTEGER' } }, required: ['x', 'y'] },
-          target: { type: 'STRING' },
-          attacker: { type: 'STRING' },
-          actor: { type: 'STRING' },
-          from: { type: 'STRING' },
-          amount: { type: 'INTEGER' },
-          hp: { type: 'INTEGER' },
-          item: { type: 'OBJECT', properties: { id: { type: 'STRING' }, qty: { type: 'INTEGER' } }, required: ['id'] },
-        },
-        required: ['type'],
-      },
-    },
-  },
-  required: ['narrative', 'commands'],
-  propertyOrdering: ['narrative', 'commands'],
-};

@@ -9,7 +9,7 @@ import { FIXTURES as DEFAULT_FIXTURES } from '../core/fixtures.js';
 import { CLASSES as DEFAULT_CLASSES, ABILITIES as DEFAULT_ABILITIES, ITEMS as DEFAULT_ITEMS } from '../engine/catalog.js';
 import { buildIllegalPresets } from './illegalPresets.js';
 
-export function mountGmPanel(rootEl, bus, { getState, catalog, fixtures = DEFAULT_FIXTURES } = {}) {
+export function mountGmPanel(rootEl, bus, { getState, catalog, fixtures = DEFAULT_FIXTURES, getGameMaster = null } = {}) {
   const catClasses = catalog?.CLASSES || DEFAULT_CLASSES;
   const catAbilities = catalog?.ABILITIES || DEFAULT_ABILITIES;
   const catItems = catalog?.ITEMS || DEFAULT_ITEMS;
@@ -165,7 +165,17 @@ export function mountGmPanel(rootEl, bus, { getState, catalog, fixtures = DEFAUL
       </div>
     </div>
 
-    <!-- 9. Footer Hashes & Integrity Status -->
+    <!-- 9. LLM Prompt & Raw Response Inspection (Task 3.9) -->
+    <div class="gm-section">
+      <h4>9. Inspeção LLM (Prompt & Raw)</h4>
+      <div style="display:flex; gap:6px; margin-bottom:8px;">
+        <button type="button" id="gm-btn-last-prompt" class="btn-sm" style="flex:1; background:var(--panel-hover); border:1px solid var(--border); color:var(--text); font-weight:600;">Último Prompt</button>
+        <button type="button" id="gm-btn-last-raw" class="btn-sm" style="flex:1; background:var(--panel-hover); border:1px solid var(--border); color:var(--text); font-weight:600;">Último Raw</button>
+      </div>
+      <pre id="gm-inspect-pre" style="max-height:160px; overflow-y:auto; background:var(--bg-deep); border:1px solid var(--border); border-radius:4px; padding:6px; font-size:10px; line-height:1.4; color:var(--text-muted); font-family:var(--font-mono); white-space:pre-wrap; margin:0;">(Nenhum prompt registrado ainda)</pre>
+    </div>
+
+    <!-- 10. Footer Hashes & Integrity Status -->
     <div class="gm-section" style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted); line-height:1.8;">
       <div>State Hash: <span id="gm-state-hash" style="color:var(--accent-gold);">--</span></div>
       <div>Map Hash: <span id="gm-map-hash" style="color:var(--accent);">--</span></div>
@@ -211,6 +221,34 @@ export function mountGmPanel(rootEl, bus, { getState, catalog, fixtures = DEFAUL
   const fixtureSelect = rootEl.querySelector('#gm-fixture');
   const rawJsonTextarea = rootEl.querySelector('#gm-raw-json');
   const btnInject = rootEl.querySelector('#gm-btn-inject');
+
+  // LLM Inspect
+  const btnLastPrompt = rootEl.querySelector('#gm-btn-last-prompt');
+  const btnLastRaw = rootEl.querySelector('#gm-btn-last-raw');
+  const inspectPre = rootEl.querySelector('#gm-inspect-pre');
+
+  btnLastPrompt?.addEventListener('click', () => {
+    const gm = typeof getGameMaster === 'function' ? getGameMaster() : null;
+    const prompt = gm?.getLastPrompt?.();
+    inspectPre.textContent = prompt ? JSON.stringify(prompt, null, 2) : '(Nenhum prompt registrado ainda)';
+  });
+
+  btnLastRaw?.addEventListener('click', () => {
+    const gm = typeof getGameMaster === 'function' ? getGameMaster() : null;
+    const raw = gm?.getLastRawResponse?.();
+    inspectPre.textContent = raw ? raw : '(Nenhuma resposta raw registrada ainda)';
+  });
+
+  function getSelectedFixtureText() {
+    const raw = rawJsonTextarea?.value?.trim();
+    if (raw) return raw;
+    const selectedKey = fixtureSelect?.value;
+    if (selectedKey && fixtures?.[selectedKey]) {
+      return JSON.stringify(fixtures[selectedKey], null, 2);
+    }
+    const defaultFix = fixtures['LLM · mover+atacar'] || Object.values(fixtures)[0];
+    return JSON.stringify(defaultFix || { narrative: 'Mestre avalia.', tool_calls: [] }, null, 2);
+  }
 
   // Hashes & Integrity
   const stateHashEl = rootEl.querySelector('#gm-state-hash');
@@ -647,5 +685,5 @@ export function mountGmPanel(rootEl, bus, { getState, catalog, fixtures = DEFAUL
     updateUI(getState());
   }
 
-  return { updateUI };
+  return { updateUI, getSelectedFixtureText };
 }

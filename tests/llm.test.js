@@ -1,3 +1,14 @@
+import {
+  buildSystemPrompt,
+  buildStateSnapshot,
+  buildUserTurn,
+  buildRequest
+} from '../src/llm/promptBuilder.js';
+import { createGameMaster } from '../src/llm/gameMaster.js';
+import { createStore, createInitialState } from '../src/engine/gameState.js';
+import { createActionQueue } from '../src/engine/actionQueue.js';
+import { TOOLS } from '../src/engine/tools.js';
+import { createEventBus } from '../src/core/eventBus.js';
 import { describe, it, expect } from './runner.js';
 import { RESPONSE_SCHEMA } from '../src/core/schema.js';
 import {
@@ -374,5 +385,258 @@ describe('Sprint 3: Response Parser & Sanitization', () => {
     const res = parseAndValidate(raw);
     expect(res.ok).toBe(false);
     expect(res.error.includes('UNKNOWN_TOOL')).toBe(true);
+  });
+});
+
+describe('Sprint 3: Prompt Builder & State Snapshot (Task 3.4)', () => {
+  const seed = 'test-prompt-seed';
+  const state = createInitialState(seed);
+
+  it('generates system prompts distinguishing Config A from B', () => {
+    const promptA = buildSystemPrompt('A');
+    const promptB = buildSystemPrompt('B');
+
+    // Both contain core role, contract, and tools
+    expect(promptA.includes('Mestre de Jogo')).toBe(true);
+    expect(promptA.includes('move_character')).toBe(true);
+    expect(promptB.includes('Mestre de Jogo')).toBe(true);
+    expect(promptB.includes('move_character')).toBe(true);
+
+    // Config A must NOT have spatial guidance or few-shot examples
+    expect(promptA.includes('reachable_tiles')).toBe(false);
+    expect(promptA.includes('Ando até o goblin')).toBe(false);
+
+    // Config B MUST have spatial guidance and 3 PT-BR few-shot examples
+    expect(promptB.includes('ORIENTAÇÃO ESPACIAL E TÁTICA (CONFIG B)')).toBe(true);
+    expect(promptB.includes('reachable_tiles')).toBe(true);
+    expect(promptB.includes('attack_positions')).toBe(true);
+    expect(promptB.includes('Ando até o goblin e corto ele')).toBe(true);
+    expect(promptB.includes('Estou ferido, quero me curar')).toBe(true);
+    expect(promptB.includes('Atravesso a parede e mato todos os goblins')).toBe(true);
+  });
+
+  it('builds state snapshot with reachable_tiles only in Config B', () => {
+    const snapA = buildStateSnapshot(state, 'A');
+    const snapB = buildStateSnapshot(state, 'B');
+
+    // Config A checks
+    expect(snapA.round).toBe(1);
+    expect(snapA.active_character.id).toBe('hero_warrior');
+    expect(snapA.reachable_tiles).toBe(undefined);
+    expect(snapA.enemy_distances).toBe(undefined);
+    expect(snapA.attack_positions).toBe(undefined);
+    expect(snapA.adjacent_objects).toBe(undefined);
+
+    // Config B checks
+    expect(Array.isArray(snapB.reachable_tiles)).toBe(true);
+    expect(snapB.reachable_tiles.length > 0).toBe(true);
+    const activeHero = state.entities[state.activeId];
+
+    // Every reachable tile in B must have cost <= activeHero.mp
+    for (const [x, y, cost] of snapB.reachable_tiles) {
+      expect(cost <= activeHero.mp).toBe(true);
+      expect(typeof x).toBe('number');
+      expect(typeof y).toBe('number');
+    }
+
+    expect(Array.isArray(snapB.enemy_distances)).toBe(true);
+    expect(typeof snapB.attack_positions).toBe('object');
+    expect(Array.isArray(snapB.adjacent_objects)).toBe(true);
+  });
+
+  it('guarantees deterministic state snapshot output for identical states', () => {
+    const snap1 = buildStateSnapshot(state, 'B');
+    const snap2 = buildStateSnapshot(state, 'B');
+
+    expect(JSON.stringify(snap1)).toBe(JSON.stringify(snap2));
+  });
+
+  it('builds structured Gemini request via buildRequest', () => {
+    const req = buildRequest({
+      state,
+      text: 'Avanço com espada',
+      tag: 'slash',
+      config: 'B',
+      memory: [{ role: 'user', text: 'Turno anterior' }]
+    });
+
+    expect(typeof req.system).toBe('string');
+    expect(Array.isArray(req.contents)).toBe(true);
+    expect(req.contents.length).toBe(2);
+    expect(req.contents[0].role).toBe('user');
+    expect(req.contents[0].parts[0].text).toBe('Turno anterior');
+    expect(req.contents[1].role).toBe('user');
+    expect(req.contents[1].parts[0].text.includes('Avanço com espada')).toBe(true);
+    expect(req.contents[1].parts[0].text.includes('[Tag Ativa: slash]')).toBe(true);
+  });
+});
+
+describe('Sprint 3: Game Master Orchestrator (Task 3.6)', () => {
+  function setupTestEnv() {
+    const bus = createEventBus();
+    const store = createStore(createInitialState('gm-test-seed'), bus);
+    const queue = createActionQueue({
+      store,
+      bus,
+      tools: TOOLS,
+      stepDelayMs: 0
+    });
+    return { bus, store, queue };
+  }
+
+  it('successfully executes valid move + attack via fake LLM', async () => {
+    const { bus, store, queue } = setupTestEnv();
+
+    // Place goblin_1 adjacent to Thorin's destination (2, 9)
+    const init = store.getState();
+    init.entities.goblin_1.position = { x: 3, y: 9 };
+
+    const fakePayload = JSON.stringify({
+      narrative: 'Thorin avança em linha reta e golpeia o goblin com força.',
+      tool_calls: [
+        {
+          name: 'move_character',
+          arguments: { character_id: 'hero_warrior', target_x: 2, target_y: 9 }
+        },
+        {
+          name: 'use_ability',
+          arguments: { caster_id: 'hero_warrior', ability_id: 'slash', target_id: 'goblin_1' }
+        }
+      ]
+    });
+
+    const llm = createFakeLlmClient({ responder: fakePayload, latencyMs: 0 });
+    const gm = createGameMaster({ store, queue, bus, llm });
+
+    const trace = await gm.handleInput({ text: 'Avanço e corto o goblin' });
+
+    expect(trace.jsonValidFirstTry).toBe(true);
+    expect(trace.repaired).toBe(false);
+    expect(trace.batchResult.applied.length).toBe(2);
+    expect(trace.batchResult.rejected).toBe(null);
+
+    // Verify state was altered by actionQueue
+    const afterState = store.getState();
+    expect(afterState.entities.hero_warrior.position.x).toBe(2);
+    expect(afterState.entities.hero_warrior.position.y).toBe(9);
+  });
+
+  it('performs 1-shot repair when first attempt returns broken JSON', async () => {
+    const { bus, store, queue } = setupTestEnv();
+
+    const responses = [
+      'Resposta quebrada sem JSON: Olá aventureiro { "narrative": ',
+      JSON.stringify({
+        narrative: 'Thorin se reposiciona taticamente.',
+        tool_calls: [
+          {
+            name: 'move_character',
+            arguments: { character_id: 'hero_warrior', target_x: 2, target_y: 9 }
+          }
+        ]
+      })
+    ];
+
+    const llm = createFakeLlmClient({ responder: responses, latencyMs: 0 });
+    const gm = createGameMaster({ store, queue, bus, llm });
+
+    const trace = await gm.handleInput({ text: 'Movo para cima' });
+
+    expect(trace.jsonValidFirstTry).toBe(false);
+    expect(trace.repaired).toBe(true);
+    expect(trace.batchResult.applied.length).toBe(1);
+    expect(store.getState().entities.hero_warrior.position.y).toBe(9);
+  });
+
+  it('stops and logs error without altering state when repair fails twice', async () => {
+    const { bus, store, queue } = setupTestEnv();
+    const beforeState = JSON.stringify(store.getState());
+
+    const responses = [
+      'Primeiro texto inválido sem JSON',
+      'Segundo texto inválido sem JSON'
+    ];
+
+    let errorLogged = false;
+    bus.on('log:entry', (entry) => {
+      if (entry.level === 'ERROR') errorLogged = true;
+    });
+
+    const llm = createFakeLlmClient({ responder: responses, latencyMs: 0 });
+    const gm = createGameMaster({ store, queue, bus, llm });
+
+    const trace = await gm.handleInput({ text: 'Ação com erro duplo' });
+
+    expect(trace.repaired).toBe(false);
+    expect(trace.schemaErrors.length > 0).toBe(true);
+    expect(errorLogged).toBe(true);
+
+    // Engine state remains 100% untouched
+    expect(JSON.stringify(store.getState())).toBe(beforeState);
+  });
+
+  it('handles engine rejection for illegal action (walk 10 tiles) and emits chat:system', async () => {
+    const { bus, store, queue } = setupTestEnv();
+    const beforePos = { ...store.getState().entities.hero_warrior.position };
+
+    let systemMsg = null;
+    bus.on('chat:system', (msg) => {
+      systemMsg = msg;
+    });
+
+    const fakePayload = JSON.stringify({
+      narrative: 'Thorin tenta correr 10 casas pelo corredor.',
+      tool_calls: [
+        {
+          name: 'move_character',
+          arguments: { character_id: 'hero_warrior', target_x: 2, target_y: 1 }
+        }
+      ]
+    });
+
+    const llm = createFakeLlmClient({ responder: fakePayload, latencyMs: 0 });
+    const gm = createGameMaster({ store, queue, bus, llm });
+
+    const trace = await gm.handleInput({ text: 'Corro 10 casas' });
+
+    expect(trace.batchResult.rejected !== null).toBe(true);
+    expect(trace.batchResult.rejected.result.code).toBe('TOO_FAR');
+    expect(systemMsg !== null).toBe(true);
+    expect(systemMsg.level).toBe('error');
+    expect(systemMsg.text.includes('Ação bloqueada')).toBe(true);
+
+    // Hero position unchanged
+    const afterPos = store.getState().entities.hero_warrior.position;
+    expect(afterPos.x).toBe(beforePos.x);
+    expect(afterPos.y).toBe(beforePos.y);
+
+    // Memory contains [MOTOR] REJEITADO
+    const mem = gm.getMemory();
+    const hasRejMem = mem.some((m) => m.text && m.text.includes('[MOTOR] REJEITADO'));
+    expect(hasRejMem).toBe(true);
+  });
+
+  it('handles refusal (tool_calls: []) without mutating state', async () => {
+    const { bus, store, queue } = setupTestEnv();
+    const beforeState = JSON.stringify(store.getState());
+
+    const fakePayload = JSON.stringify({
+      narrative: 'Não é possível voar por cima das muralhas de pedra.',
+      tool_calls: []
+    });
+
+    let refusalLogged = false;
+    bus.on('log:entry', (entry) => {
+      if (entry.text.includes('Nenhuma ação proposta')) refusalLogged = true;
+    });
+
+    const llm = createFakeLlmClient({ responder: fakePayload, latencyMs: 0 });
+    const gm = createGameMaster({ store, queue, bus, llm });
+
+    const trace = await gm.handleInput({ text: 'Eu tento voar' });
+
+    expect(trace.batchResult.applied.length).toBe(0);
+    expect(refusalLogged).toBe(true);
+    expect(JSON.stringify(store.getState())).toBe(beforeState);
   });
 });

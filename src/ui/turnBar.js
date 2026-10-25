@@ -4,12 +4,41 @@
  */
 import { PHASE } from '../core/config.js';
 import { CLASSES } from '../engine/catalog.js';
+import { loadSettings } from '../core/settings.js';
 
-export function mountTurnBar(rootEl, bus, { getState } = {}) {
+export function mountTurnBar(rootEl, bus, { getState, isFakeLlm = false } = {}) {
   const roundEl = rootEl.querySelector('#turn-round') || document.getElementById('turn-round');
   const activeEl = rootEl.querySelector('#turn-active') || document.getElementById('turn-active');
 
+  function updateBadge() {
+    let badgeEl = rootEl.querySelector('#turn-llm-badge');
+    if (!badgeEl) {
+      const contentEl = rootEl.querySelector('.turn-bar-content');
+      if (contentEl) {
+        const sep = document.createElement('span');
+        sep.className = 'turn-separator';
+        sep.textContent = '·';
+        badgeEl = document.createElement('span');
+        badgeEl.id = 'turn-llm-badge';
+        badgeEl.className = 'turn-llm-badge';
+        contentEl.appendChild(sep);
+        contentEl.appendChild(badgeEl);
+      }
+    }
+    if (badgeEl) {
+      if (isFakeLlm) {
+        badgeEl.textContent = 'FAKE LLM';
+        badgeEl.style.color = 'var(--accent-gold)';
+      } else {
+        const s = loadSettings();
+        badgeEl.textContent = `Prompt ${s.promptConfig || 'B'} · ${s.model || 'gemini-3.8-flash'}`;
+        badgeEl.style.color = 'var(--accent)';
+      }
+    }
+  }
+
   function render(state) {
+    updateBadge();
     if (!state) return;
 
     if (roundEl) {
@@ -61,6 +90,7 @@ export function mountTurnBar(rootEl, bus, { getState } = {}) {
     }
   }
 
+  bus?.on('settings:changed', () => updateBadge());
   bus?.on('state:changed', ({ state }) => render(state));
   bus?.on('turn:changed', () => {
     if (typeof getState === 'function') {

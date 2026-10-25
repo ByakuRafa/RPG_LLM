@@ -1,24 +1,31 @@
 /**
- * RPG_LLM Main Entry Point (Task 3.1 & Task 3.9).
- * Composition root wiring store, renderer, queue, turns, enemy AI, UI panels, chat, HUD, and game over.
+ * RPG_LLM Main Entry Point (Sprint 3, Task 3.9).
+ * Composition root wiring store, renderer, queue, turns, enemy AI, UI panels, chat, HUD,
+ * game over overlay, GameMaster pipeline, Settings modal, and Fake/Real LLM clients.
  */
 import { CONFIG, PHASE } from './core/config.js';
 import { createEventBus } from './core/eventBus.js';
 import { FIXTURES } from './core/fixtures.js';
+import { loadSettings, initSettings, hasApiKey } from './core/settings.js';
 import { createInitialState, createStore } from './engine/gameState.js';
 import { TOOLS } from './engine/tools.js';
 import { createActionQueue } from './engine/actionQueue.js';
 import { createTurnController } from './engine/turnTracker.js';
 import { HeuristicEnemyStrategy, createEnemyController } from './engine/enemyController.js';
-
 import { computeReachable } from './engine/pathfinding.js';
 import { CLASSES, ABILITIES, HERO_ROSTER } from './engine/catalog.js';
+
+import { createLlmClient } from './llm/llmClient.js';
+import { createFakeLlmClient } from './llm/fakeLlmClient.js';
+import { createGameMaster } from './llm/gameMaster.js';
+
 import { createGridRenderer } from './render/gridRenderer.js';
 import { mountTurnBar } from './ui/turnBar.js';
 import { mountActivityLog } from './ui/activityLog.js';
 import { mountGmPanel } from './ui/gmPanel.js';
 import { mountHud } from './ui/hud.js';
 import { mountChat } from './ui/chat.js';
+import { mountSettingsModal } from './ui/settingsModal.js';
 
 /**
  * Builds the view model for renderer consumption.
@@ -53,13 +60,15 @@ let lastBootResult = null;
 export async function boot() {
   if (lastBootResult) return lastBootResult;
 
-  // 1. URL Overrides: ?seed=... & ?debug=1
+  // 1. URL Overrides: ?seed=..., ?debug=1, ?fakeLlm=1
   const urlParams = new URLSearchParams(window.location.search);
   const seed = urlParams.get('seed') || CONFIG.DEFAULT_SEED;
   const debug = urlParams.get('debug') === '1';
+  const isFakeLlm = urlParams.has('fakeLlm') || urlParams.get('fakeLlm') === '1';
 
-  // 2. Pure Event Bus
+  // 2. Pure Event Bus & Settings Initialization
   const bus = createEventBus();
+  initSettings(bus);
 
   // 3. State Store
   const store = createStore(createInitialState(seed), bus);
@@ -77,7 +86,7 @@ export async function boot() {
     stepDelayMs: CONFIG.QUEUE_STEP_DELAY_MS
   });
 
-  // 6. Turn Controller & Deterministic Enemy AI (Task 3.9)
+  // 6. Turn Controller & Deterministic Enemy AI
   const enemyController = createEnemyController({
     strategies: {
       HEURISTIC: new HeuristicEnemyStrategy()
@@ -85,7 +94,26 @@ export async function boot() {
   });
   const turns = createTurnController({ store, bus, queue, enemyController });
 
-  // 7. Mount UI Panels
+  // 7. LLM Client & Game Master Orchestrator (Task 3.9)
+  let gmPanel = null;
+  const llm = isFakeLlm
+    ? createFakeLlmClient({
+        responder: () => (gmPanel ? gmPanel.getSelectedFixtureText() : '{"narrative":"Simulação offline","tool_calls":[]}')
+      })
+    : createLlmClient({ getSettings: loadSettings });
+
+  const gm = createGameMaster({
+    store,
+    queue,
+    bus,
+    llm,
+    getSettings: loadSettings
+  });
+
+  // 8. Mount Settings Modal
+  const settingsModal = mountSettingsModal(bus);
+
+  // 9. Mount UI Panels
   const turnBarEl = document.getElementById('turn-bar');
   const activityLogEl = document.getElementById('activity-log');
   const gmDrawerEl = document.getElementById('gm-drawer');
@@ -93,7 +121,7 @@ export async function boot() {
   const chatPanelEl = document.getElementById('chat-panel');
 
   if (turnBarEl) {
-    mountTurnBar(turnBarEl, bus, { getState: store.getState });
+    mountTurnBar(turnBarEl, bus, { getState: store.getState, isFakeLlm });
   }
 
   if (activityLogEl) {
@@ -101,10 +129,11 @@ export async function boot() {
   }
 
   if (gmDrawerEl) {
-    mountGmPanel(gmDrawerEl, bus, {
+    gmPanel = mountGmPanel(gmDrawerEl, bus, {
       getState: store.getState,
       catalog: { CLASSES, ABILITIES, HERO_ROSTER },
-      fixtures: FIXTURES
+      fixtures: FIXTURES,
+      getGameMaster: () => gm
     });
   }
 
@@ -117,8 +146,19 @@ export async function boot() {
   if (chatPanelEl) {
     chat = mountChat(chatPanelEl, bus);
 
-    // Pre-LLM Chat Submit Handler (Task 3.6): local echo
-    bus.on('chat:submit', ({ text, tag }) => {
+    // Natural Language Chat Submit Handler (Task 3.9)
+    bus.on('chat:submit', async ({ text, tag }) => {
+      // If running real LLM and no API key configured, prompt settings modal
+      if (!isFakeLlm && !hasApiKey()) {
+        settingsModal.open();
+        bus.emit('chat:system', {
+          level: 'info',
+          text: 'Configure sua Chave de API Google AI Studio nas Configurações para interagir com o Mestre.'
+        });
+        return;
+      }
+
+      // Echo player message into chat
       const s = store.getState();
       const active = s.entities?.[s.activeId];
       const author = active?.name || 'Herói';
@@ -130,16 +170,12 @@ export async function boot() {
         text: `"${text}"${tagPart}`
       });
 
-      bus.emit('log:entry', {
-        level: 'INFO',
-        text: `[INFO] (Sem LLM) ${author}: "${text}"${tagPart}`,
-        source: 'CHAT',
-        ts: Date.now()
-      });
+      // Pipeline execution through Game Master
+      await gm.handleInput({ text, tag, recordPrompt: true });
     });
   }
 
-  // 8. Game Over Overlay (Task 3.9)
+  // 10. Game Over Overlay (Task 3.9)
   const overlayEl = document.getElementById('overlay-gameover');
   const titleEl = document.getElementById('gameover-title');
   const descEl = document.getElementById('gameover-desc');
@@ -168,8 +204,8 @@ export async function boot() {
     bus.emit('intent:reset');
   });
 
-  // 9. Wire Intent Events
-  bus.on('intent:enqueue', batch => {
+  // 11. Wire Intent Events
+  bus.on('intent:enqueue', (batch) => {
     queue.enqueue(batch);
   });
 
@@ -181,13 +217,13 @@ export async function boot() {
     turns.start();
   });
 
-  // 10. Wire State Changes to Renderer View Model & Game Over
+  // 12. Wire State Changes to Renderer View Model & Game Over
   bus.on('state:changed', ({ state }) => {
     renderer.setView(buildViewModel(state));
     checkGameOver(state);
   });
 
-  // 11. Start First Turn & Initial Render
+  // 13. Start First Turn & Initial Render
   turns.start();
   const initialState = store.getState();
   renderer.setView(buildViewModel(initialState));
@@ -202,10 +238,12 @@ export async function boot() {
     window.__turns = turns;
     window.__hud = hud;
     window.__chat = chat;
-    console.info('[RPG_LLM] Debug mode active. Globals: __store, __bus, __queue, __renderer, __turns, __hud, __chat');
+    window.__gm = gm;
+    window.__settingsModal = settingsModal;
+    console.info('[RPG_LLM] Debug mode active. Globals: __store, __bus, __queue, __renderer, __turns, __hud, __chat, __gm, __settingsModal');
   }
 
-  lastBootResult = { store, bus, queue, renderer, turns, enemyController, hud, chat };
+  lastBootResult = { store, bus, queue, renderer, turns, enemyController, hud, chat, gm, settingsModal };
   return lastBootResult;
 }
 
