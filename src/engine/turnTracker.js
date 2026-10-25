@@ -141,7 +141,7 @@ export function createTurnController({ store, bus, queue, enemyController = null
   async function runEnemyPhase() {
     bus?.emit('log:entry', {
       level: 'TURN',
-      text: '[TURN] Fase Inimiga (IA ainda não implementada)',
+      text: '[TURN] Fase Inimiga',
       source: 'SYSTEM',
       ts: Date.now()
     });
@@ -155,6 +155,13 @@ export function createTurnController({ store, bus, queue, enemyController = null
       const { state: nextState, events } = advanceTurn(store.getState());
       store.commit(nextState, events);
       bus?.emit('turn:changed', { activeId: nextState.activeId, round: nextState.round, phase: nextState.phase });
+      const heroName = nextState.entities[nextState.activeId]?.name || 'Thorin';
+      bus?.emit('log:entry', {
+        level: 'TURN',
+        text: `[TURN] Vez de ${heroName} (Rodada ${nextState.round}).`,
+        source: 'SYSTEM',
+        ts: Date.now()
+      });
     }
   }
 
@@ -162,11 +169,22 @@ export function createTurnController({ store, bus, queue, enemyController = null
     bus.on('queue:batchDone', async (result) => {
       const hadEndTurn = result?.applied?.some(item => item.call?.name === 'end_turn');
       if (hadEndTurn) {
+        const outcome = evaluateGameOver(store.getState());
+        if (outcome) return;
+
         const { state: nextState, events } = advanceTurn(store.getState());
         store.commit(nextState, events);
         bus?.emit('turn:changed', { activeId: nextState.activeId, round: nextState.round, phase: nextState.phase });
         if (nextState.phase === PHASE.ENEMY) {
           await runEnemyPhase();
+        } else {
+          const heroName = nextState.entities[nextState.activeId]?.name || 'Thorin';
+          bus?.emit('log:entry', {
+            level: 'TURN',
+            text: `[TURN] Vez de ${heroName} (Rodada ${nextState.round}).`,
+            source: 'SYSTEM',
+            ts: Date.now()
+          });
         }
       }
     });

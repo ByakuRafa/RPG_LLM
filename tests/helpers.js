@@ -115,6 +115,7 @@ export function makeTestState(asciiRows, overrides = {}) {
   }
 
   const baseState = {
+    status: 'playing',
     map: {
       width,
       height,

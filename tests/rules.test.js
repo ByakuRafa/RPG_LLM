@@ -7,10 +7,12 @@ import { describe, it, assert, assertEqual, assertDeepEqual } from './runner.js'
 import { makeTestState } from './helpers.js';
 import { PHASE } from '../src/core/config.js';
 import {
+  validateMove,
   validateUseAbility,
   validateUseItem,
   validateInteract,
   validateCheckInventory,
+  validateEndTurn,
   explain
 } from '../src/engine/rules.js';
 import {
@@ -20,8 +22,14 @@ import {
   applyUseItem,
   applyInteract,
   applyCheckInventory,
-  evaluateGameOver
+  evaluateGameOver,
+  stateHash,
+  createStore,
+  createEntity
 } from '../src/engine/gameState.js';
+import { getBlockerAt } from '../src/engine/pathfinding.js';
+import { createActionQueue } from '../src/engine/actionQueue.js';
+import { createEnemyController, HeuristicEnemyStrategy } from '../src/engine/enemyController.js';
 import { TOOLS, TOOL_NAMES } from '../src/engine/tools.js';
 import { normalizeBatch, validateBatch } from '../src/core/schema.js';
 import { describeEvent } from '../src/core/messages.js';
@@ -742,5 +750,393 @@ describe('Integração de Schema e Mensagens (Sprint 2)', () => {
     const evPushBlocked = describeEvent({ type: 'push_blocked', id: 'goblin_1', reason: 'wall' }, s);
     assertEqual(evPushBlocked.level, 'INFO');
     assert(evPushBlocked.text.includes('parede no caminho'));
+  });
+});
+
+
+describe('Validação de Movimentação e Fim de Turno (validateMove, validateEndTurn) e Códigos Universais', () => {
+  it('valida movimento legal para tile adjacente livre', () => {
+    const s = makeTestState([
+      '#####',
+      '#W..#',
+      '#####',
+    ]);
+    const res = validateMove(s, { character_id: 'hero_warrior', target_x: 2, target_y: 1 });
+    assertEqual(res.ok, true);
+    assertEqual(res.resolved.cost, 1);
+  });
+
+  it('rejeita movimento para fora dos limites do mapa (OUT_OF_BOUNDS)', () => {
+    const s = makeTestState([
+      '#####',
+      '#W..#',
+      '#####',
+    ]);
+    const res = validateMove(s, { character_id: 'hero_warrior', target_x: -1, target_y: 1 });
+    assertEqual(res.ok, false);
+    assertEqual(res.code, 'OUT_OF_BOUNDS');
+  });
+
+  it('rejeita movimento para o mesmo tile em que o ator está (SAME_TILE)', () => {
+    const s = makeTestState([
+      '#####',
+      '#W..#',
+      '#####',
+    ]);
+    const res = validateMove(s, { character_id: 'hero_warrior', target_x: 1, target_y: 1 });
+    assertEqual(res.ok, false);
+    assertEqual(res.code, 'SAME_TILE');
+  });
+
+  it('rejeita movimento para parede (TARGET_IS_WALL)', () => {
+    const s = makeTestState([
+      '#####',
+      '#W..#',
+      '#####',
+    ]);
+    const res = validateMove(s, { character_id: 'hero_warrior', target_x: 0, target_y: 1 });
+    assertEqual(res.ok, false);
+    assertEqual(res.code, 'TARGET_IS_WALL');
+  });
+
+  it('rejeita movimento para destino ocupado por entidade ou objeto (TARGET_OCCUPIED)', () => {
+    const s = makeTestState([
+      '#####',
+      '#WGC#',
+      '#####',
+    ]);
+    const resGoblin = validateMove(s, { character_id: 'hero_warrior', target_x: 2, target_y: 1 });
+    assertEqual(resGoblin.ok, false);
+    assertEqual(resGoblin.code, 'TARGET_OCCUPIED');
+
+    const resChest = validateMove(s, { character_id: 'hero_warrior', target_x: 3, target_y: 1 });
+    assertEqual(resChest.ok, false);
+    assertEqual(resChest.code, 'TARGET_OCCUPIED');
+  });
+
+  it('rejeita movimento quando o personagem não tem pontos de movimento (NO_MP)', () => {
+    const s = makeTestState([
+      '#####',
+      '#W..#',
+      '#####',
+    ]);
+    s.entities.hero_warrior.mp = 0;
+    const res = validateMove(s, { character_id: 'hero_warrior', target_x: 2, target_y: 1 });
+    assertEqual(res.ok, false);
+    assertEqual(res.code, 'NO_MP');
+  });
+
+  it('rejeita movimento além do alcance máximo de MP (TOO_FAR)', () => {
+    const s = makeTestState([
+      '########',
+      '#W.....#',
+      '########',
+    ]);
+    // Thorin tem maxMp = 4. Distância até x=6 é 5.
+    const res = validateMove(s, { character_id: 'hero_warrior', target_x: 6, target_y: 1 });
+    assertEqual(res.ok, false);
+    assertEqual(res.code, 'TOO_FAR');
+  });
+
+  it('rejeita movimento inacessível por obstáculos mesmo que distância Manhattan seja <= MP (UNREACHABLE)', () => {
+    const s = makeTestState([
+      '#####',
+      '#W#.#',
+      '#####',
+    ]);
+    // Destino (3, 1) tem Manhattan = 2 <= MP, mas parede bloqueia caminho BFS
+    const res = validateMove(s, { character_id: 'hero_warrior', target_x: 3, target_y: 1 });
+    assertEqual(res.ok, false);
+    assertEqual(res.code, 'UNREACHABLE');
+  });
+
+  it('valida passagem de turno legal (validateEndTurn)', () => {
+    const s = makeTestState([
+      '#####',
+      '#W..#',
+      '#####',
+    ]);
+    const res = validateEndTurn(s, { character_id: 'hero_warrior' });
+    assertEqual(res.ok, true);
+  });
+
+  it('rejeita ação para entidade desconhecida (UNKNOWN_ENTITY)', () => {
+    const s = makeTestState([
+      '#####',
+      '#W..#',
+      '#####',
+    ]);
+    const res = validateMove(s, { character_id: 'hero_ghost', target_x: 2, target_y: 1 });
+    assertEqual(res.ok, false);
+    assertEqual(res.code, 'UNKNOWN_ENTITY');
+  });
+
+  it('rejeita ação quando a entidade ativa está morta (ENTITY_DEAD)', () => {
+    const s = makeTestState([
+      '#####',
+      '#W..#',
+      '#####',
+    ]);
+    s.entities.hero_warrior.alive = false;
+    s.entities.hero_warrior.hp = 0;
+    const res = validateMove(s, { character_id: 'hero_warrior', target_x: 2, target_y: 1 });
+    assertEqual(res.ok, false);
+    assertEqual(res.code, 'ENTITY_DEAD');
+  });
+
+  it('rejeita ação quando a fase do jogo é inválida (WRONG_PHASE)', () => {
+    const s = makeTestState([
+      '#####',
+      '#W..#',
+      '#####',
+    ], { phase: 'UNKNOWN_PHASE' });
+    const res = validateMove(s, { character_id: 'hero_warrior', target_x: 2, target_y: 1 });
+    assertEqual(res.ok, false);
+    assertEqual(res.code, 'WRONG_PHASE');
+  });
+
+  it('rejeita uso de item inexistente no catálogo (UNKNOWN_ITEM)', () => {
+    const s = makeTestState([
+      '#####',
+      '#W..#',
+      '#####',
+    ]);
+    const res = validateUseItem(s, { character_id: 'hero_warrior', item_id: 'mega_elixir' });
+    assertEqual(res.ok, false);
+    assertEqual(res.code, 'UNKNOWN_ITEM');
+  });
+});
+
+describe('Invariantes de Estado e Reducers (Task 3.10)', () => {
+  it('chamadas rejeitadas deixam stateHash rigorosamente inalterado', () => {
+    const s = makeTestState([
+      '#####',
+      '#W.G#',
+      '#####',
+    ]);
+    const initialHash = stateHash(s);
+
+    const moveRes = validateMove(s, { character_id: 'hero_warrior', target_x: 0, target_y: 1 });
+    assertEqual(moveRes.ok, false);
+    assertEqual(stateHash(s), initialHash);
+
+    const abRes = validateUseAbility(s, { caster_id: 'hero_warrior', ability_id: 'slash', target_id: 'goblin_1' });
+    assertEqual(abRes.ok, false);
+    assertEqual(stateHash(s), initialHash);
+  });
+
+  it('uso de habilidade consome AP e zera o AP do personagem ativo', () => {
+    const s = makeTestState([
+      '#####',
+      '#WG.#',
+      '#####',
+    ]);
+    assertEqual(s.entities.hero_warrior.ap, 1);
+    const { state: next } = applyAbility(s, { caster_id: 'hero_warrior', ability_id: 'slash', target_id: 'goblin_1' });
+    assertEqual(next.entities.hero_warrior.ap, 0);
+  });
+
+  it('cura por poção limita-se rigorosamente ao maxHp (clamping)', () => {
+    const s = makeTestState([
+      '#####',
+      '#W..#',
+      '#####',
+    ]);
+    s.entities.hero_warrior.hp = 23;
+    s.entities.hero_warrior.maxHp = 25;
+    const { state: next, events } = applyHeal(s, 'hero_warrior', 10);
+    assertEqual(next.entities.hero_warrior.hp, 25);
+    assertEqual(events[0].amount, 2);
+  });
+
+  it('mesclagem de pilhas de loot acumula itens existentes no inventário compartilhado', () => {
+    const s = makeTestState([
+      '#####',
+      '#WC.#',
+      '#####',
+    ], {
+      inventory: [{ id: 'health_potion', qty: 2 }]
+    });
+    // chest_1 possui 1 health_potion no loot
+    const { state: next } = applyInteract(s, { character_id: 'hero_warrior', object_id: 'chest_1' });
+    const potionSlot = next.inventory.find(i => i.id === 'health_potion');
+    assertEqual(potionSlot.qty, 3);
+  });
+
+  it('morte define alive = false e libera o tile ocupado pela unidade', () => {
+    const s = makeTestState([
+      '#####',
+      '#WG.#',
+      '#####',
+    ]);
+    const { state: next } = applyDamage(s, 'goblin_1', 12);
+    assertEqual(next.entities.goblin_1.alive, false);
+    assertEqual(next.entities.goblin_1.hp, 0);
+    const blocker = getBlockerAt(next, 2, 1);
+    assertEqual(blocker, null);
+  });
+
+  it('derrotar o último goblin define status = won e emite game_over', () => {
+    const s = makeTestState([
+      '#####',
+      '#WG.#',
+      '#####',
+    ]);
+    const { state: next, events } = applyDamage(s, 'goblin_1', 12);
+    assertEqual(next.status, 'won');
+    assertEqual(next.phase, PHASE.GAME_OVER);
+    const goEvent = events.find(e => e.type === 'game_over');
+    assert(Boolean(goEvent));
+    assertEqual(goEvent.status, 'won');
+  });
+});
+
+describe('Fila de Ações - Interrupção na Primeira Falha (Task 3.10)', () => {
+  it('[legal move, illegal attack, end_turn] -> applied.length === 1, rejected.index === 1, skipped.length === 1', async () => {
+    const s = makeTestState([
+      '######',
+      '#W..G#',
+      '######',
+    ]);
+    const store = createStore(s);
+    const queue = createActionQueue({ store, tools: TOOLS });
+
+    const batch = {
+      source: 'HUMAN_GM',
+      tool_calls: [
+        { name: 'move_character', arguments: { character_id: 'hero_warrior', target_x: 2, target_y: 1 } },
+        { name: 'use_ability', arguments: { caster_id: 'hero_warrior', ability_id: 'slash', target_id: 'goblin_1' } }, // distância é 2 > 1 (OUT_OF_RANGE)
+        { name: 'end_turn', arguments: { character_id: 'hero_warrior' } }
+      ]
+    };
+
+    const res = await queue.enqueue(batch);
+    assertEqual(res.applied.length, 1);
+    assertEqual(res.applied[0].call.name, 'move_character');
+    assertEqual(res.rejected.index, 1);
+    assertEqual(res.rejected.call.name, 'use_ability');
+    assertEqual(res.rejected.result.code, 'OUT_OF_RANGE');
+    assertEqual(res.skipped.length, 1);
+    assertEqual(res.skipped[0].name, 'end_turn');
+
+    assertEqual(store.getState().entities.hero_warrior.position.x, 2);
+  });
+});
+
+describe('IA Inimiga Determinística (Task 3.4 & Task 3.10)', () => {
+  it('mesmo estado produz plano estritamente idêntico (determinismo)', () => {
+    const ai = new HeuristicEnemyStrategy();
+    const s = makeTestState([
+      '#######',
+      '#W...G#',
+      '#######',
+    ]);
+    const plan1 = ai.planForEnemy(s, 'goblin_1');
+    const plan2 = ai.planForEnemy(s, 'goblin_1');
+    assertDeepEqual(plan1, plan2);
+  });
+
+  it('goblin se aproxima do herói reduzindo a distância (e ataca se alcançar adjacência)', () => {
+    const ai = new HeuristicEnemyStrategy();
+    // Caso 1: Thorin em (1, 1), Goblin em (5, 1). MP = 3 leva goblin até (2, 1), adjacente a Thorin -> move + ataca
+    const s = makeTestState([
+      '#######',
+      '#W...G#',
+      '#######',
+    ]);
+    const plan = ai.planForEnemy(s, 'goblin_1');
+    assertEqual(plan.length, 2);
+    assertEqual(plan[0].name, 'move_character');
+    assertEqual(plan[0].arguments.character_id, 'goblin_1');
+    assertEqual(plan[0].arguments.target_x, 2);
+    assertEqual(plan[0].arguments.target_y, 1);
+    assertEqual(plan[1].name, 'use_ability');
+    assertEqual(plan[1].arguments.ability_id, 'goblin_strike');
+    assertEqual(plan[1].arguments.target_id, 'hero_warrior');
+
+    // Caso 2: Thorin em (1, 1), Goblin em (6, 1). MP = 3 leva até (3, 1), não adjacente -> somente move
+    const sFar = makeTestState([
+      '########',
+      '#W....G#',
+      '########',
+    ]);
+    const planFar = ai.planForEnemy(sFar, 'goblin_1');
+    assertEqual(planFar.length, 1);
+    assertEqual(planFar[0].name, 'move_character');
+    assertEqual(planFar[0].arguments.target_x, 3);
+    assertEqual(planFar[0].arguments.target_y, 1);
+  });
+
+  it('goblin adjacente ataca o herói com menor HP e desempata por ordem de turno', () => {
+    const ai = new HeuristicEnemyStrategy();
+    const s = makeTestState([
+      '#####',
+      '#W.M#',
+      '#####',
+    ], {
+      entities: {
+        hero_warrior: {
+          ...createEntity({ id: 'hero_warrior', classId: 'warrior', player: 1, position: { x: 1, y: 1 } }),
+          hp: 20
+        },
+        goblin_1: {
+          ...createEntity({ id: 'goblin_1', classId: 'goblin', role: 'enemy', position: { x: 2, y: 1 } }),
+          ap: 1,
+          mp: 3
+        },
+        hero_mage: {
+          ...createEntity({ id: 'hero_mage', classId: 'mage', player: 2, position: { x: 3, y: 1 } }),
+          hp: 6
+        }
+      }
+    });
+
+    const plan = ai.planForEnemy(s, 'goblin_1');
+    assertEqual(plan.length, 1);
+    assertEqual(plan[0].name, 'use_ability');
+    assertEqual(plan[0].arguments.ability_id, 'goblin_strike');
+    assertEqual(plan[0].arguments.target_id, 'hero_mage');
+  });
+
+  it('goblin atrás de parede contorna pelo caminho real (campo de distância, não Manhattan)', () => {
+    const ai = new HeuristicEnemyStrategy();
+    const s = makeTestState([
+      '#####',
+      '#W#G#',
+      '#.#.#',
+      '#...#',
+      '#####',
+    ]);
+    // Com MP = 3, o caminho de menor custo BFS contorna o canto até (2, 3) (distância BFS 3 < 6; Manhattan 3 > 2)
+    const plan = ai.planForEnemy(s, 'goblin_1');
+    assertEqual(plan.length, 1);
+    assertEqual(plan[0].name, 'move_character');
+    assertEqual(plan[0].arguments.target_x, 2);
+    assertEqual(plan[0].arguments.target_y, 3);
+
+    // Com MP = 1, o primeiro passo BFS para contornar a parede é (3, 2)
+    s.entities.goblin_1.mp = 1;
+    const planStep = ai.planForEnemy(s, 'goblin_1');
+    assertEqual(planStep.length, 1);
+    assertEqual(planStep[0].name, 'move_character');
+    assertEqual(planStep[0].arguments.target_x, 3);
+    assertEqual(planStep[0].arguments.target_y, 2);
+  });
+
+  it('createEnemyController.executeTurn executa turno completo na fila para todos os inimigos vivos em ordem de ID', async () => {
+    const ctrl = createEnemyController();
+    const s = makeTestState([
+      '#######',
+      '#W..GG#',
+      '#######',
+    ], { phase: PHASE.ENEMY });
+    const store = createStore(s);
+    const queue = createActionQueue({ store, tools: TOOLS });
+
+    await ctrl.executeTurn({ store, queue });
+
+    const finalState = store.getState();
+    assert(finalState.entities.goblin_1.position.x < 4);
+    assert(finalState.entities.goblin_2.position.x < 5);
   });
 });

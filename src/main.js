@@ -9,6 +9,8 @@ import { createInitialState, createStore } from './engine/gameState.js';
 import { TOOLS } from './engine/tools.js';
 import { createActionQueue } from './engine/actionQueue.js';
 import { createTurnController } from './engine/turnTracker.js';
+import { createEnemyController } from './engine/enemyController.js';
+
 import { computeReachable } from './engine/pathfinding.js';
 import { CLASSES, ABILITIES, HERO_ROSTER } from './engine/catalog.js';
 import { createGridRenderer } from './render/gridRenderer.js';
@@ -73,8 +75,9 @@ export async function boot() {
     stepDelayMs: CONFIG.QUEUE_STEP_DELAY_MS
   });
 
-  // 6. Turn Controller
-  const turns = createTurnController({ store, bus, queue });
+  // 6. Turn Controller & Enemy AI
+  const enemyController = createEnemyController();
+  const turns = createTurnController({ store, bus, queue, enemyController });
 
   // 7. Mount UI Panels
   const turnBarEl = document.getElementById('turn-bar');
@@ -128,7 +131,7 @@ export async function boot() {
     console.info('[RPG_LLM] Debug mode active. Globals: __store, __bus, __queue, __renderer, __turns');
   }
 
-  lastBootResult = { store, bus, queue, renderer, turns };
+  lastBootResult = { store, bus, queue, renderer, turns, enemyController };
   return lastBootResult;
 }
 
