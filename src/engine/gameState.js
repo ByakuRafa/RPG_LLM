@@ -1,163 +1,246 @@
 /**
- * Game state: initial state factory, pure reducer and a tiny store.
- * applyCommand never mutates its input; it returns a new state plus the list
- * of visual events the renderer must play (move path, hit, death, ...).
+ * Game state: factory, pure selectors, reducers, and store.
+ * Zero DOM, Zero Canvas, 100% pure JS logic.
  */
-import { createMap, INITIAL_ENTITIES } from './map.js';
-import { createEntity, normalizeItem } from './entities.js';
-import { checkCommand } from './rules.js';
-
-export function createInitialState() {
-  const entities = {};
-  for (const spec of INITIAL_ENTITIES) {
-    entities[spec.id] = createEntity(spec.kind, spec.id, spec.x, spec.y, spec);
-  }
-  return { turn: 0, status: 'playing', map: createMap(), entities };
-}
-
-function clone(value) {
-  return typeof structuredClone === 'function' ? structuredClone(value) : JSON.parse(JSON.stringify(value));
-}
-
-function uniqueId(state, base) {
-  if (!state.entities[base]) return base;
-  let n = 2;
-  while (state.entities[`${base}_${n}`]) n++;
-  return `${base}_${n}`;
-}
-
-function addItems(target, items) {
-  for (const item of items) {
-    const existing = target.items.find((i) => i.id === item.id);
-    if (existing) existing.qty += item.qty;
-    else target.items.push({ ...item });
-  }
-}
-
-function removeItems(source, items) {
-  for (const item of items) {
-    const existing = source.items.find((i) => i.id === item.id);
-    existing.qty -= item.qty;
-  }
-  source.items = source.items.filter((i) => i.qty > 0);
-}
-
-function dealDamage(s, targetId, amount, events, sourceId = null) {
-  const t = s.entities[targetId];
-  t.hp = Math.max(0, t.hp - amount);
-  events.push({ type: 'hit', id: t.id, amount, hp: t.hp, source: sourceId, entity: { ...t } });
-  if (t.hp > 0) return;
-
-  if (t.id === 'player') {
-    events.push({ type: 'death', entity: { ...t }, keep: true });
-    return;
-  }
-  const snapshot = { ...t };
-  delete s.entities[t.id];
-  events.push({ type: 'death', entity: snapshot });
-  if (t.items?.length) {
-    const bagId = uniqueId(s, `bag_${t.id}`);
-    s.entities[bagId] = createEntity('bag', bagId, t.x, t.y, { items: t.items });
-    events.push({ type: 'spawn', id: bagId });
-  }
-}
-
-function updateStatus(s) {
-  const player = s.entities.player;
-  if (!player || player.hp <= 0) s.status = 'lost';
-  else if (!Object.values(s.entities).some((e) => e.faction === 'enemy')) s.status = 'won';
-}
+import { CONFIG, PHASE } from '../core/config.js';
+import { hashString } from '../core/prng.js';
+import { CLASSES, ABILITIES, HERO_ROSTER } from './catalog.js';
+import { generateDungeon } from './mapGenerator.js';
 
 /**
- * Applies an already-validated command.
- * @returns {{state: object, events: Array}}
+ * Creates an entity by merging spec with class definitions.
+ * @param {object} spec
+ * @returns {object} Entity
  */
-export function applyCommand(state, cmd, resolution) {
-  const s = clone(state);
-  const events = [];
+export function createEntity(spec) {
+  const cls = CLASSES[spec.classId] || {};
+  const maxHp = spec.maxHp ?? cls.maxHp ?? 10;
+  const maxMp = spec.maxMp ?? cls.maxMp ?? 0;
+  const maxAp = spec.maxAp ?? cls.maxAp ?? 1;
 
-  switch (cmd.type) {
-    case 'MOVE': {
-      const e = s.entities[cmd.id];
-      if (resolution.path.length) {
-        const from = { x: e.x, y: e.y };
-        const last = resolution.path[resolution.path.length - 1];
-        e.x = last.x;
-        e.y = last.y;
-        events.push({ type: 'move', id: e.id, path: [from, ...resolution.path] });
-      }
-      break;
-    }
-    case 'ATTACK':
-      events.push({ type: 'attack', attacker: cmd.attacker, target: cmd.target });
-      dealDamage(s, cmd.target, resolution.amount, events, cmd.attacker);
-      break;
-    case 'DAMAGE':
-      dealDamage(s, cmd.target, resolution.amount, events);
-      break;
-    case 'INTERACT':
-      s.entities[cmd.target].open = true;
-      events.push({ type: 'open', id: cmd.target });
-      break;
-    case 'LOOT': {
-      const actor = s.entities[cmd.actor];
-      const src = s.entities[cmd.from];
-      removeItems(src, resolution.items);
-      addItems(actor, resolution.items);
-      events.push({ type: 'loot', actor: actor.id, from: src.id, items: resolution.items });
-      if (src.kind === 'bag' && src.items.length === 0) {
-        delete s.entities[src.id];
-        events.push({ type: 'despawn', entity: { ...src } });
-      }
-      break;
-    }
-    case 'SPAWN': {
-      const items = (cmd.items ?? []).map(normalizeItem);
-      s.entities[cmd.id] = createEntity(cmd.kind, cmd.id, cmd.at.x, cmd.at.y, { hp: cmd.hp, items });
-      events.push({ type: 'spawn', id: cmd.id });
-      break;
-    }
-    case 'DESPAWN': {
-      const snapshot = { ...s.entities[cmd.id] };
-      delete s.entities[cmd.id];
-      events.push({ type: 'despawn', entity: snapshot });
-      break;
-    }
-    default:
-      throw new Error(`applyCommand: unsupported type ${cmd.type}`);
-  }
-
-  updateStatus(s);
-  return { state: s, events };
-}
-
-/** Check + apply in one step. */
-export function executeCommand(state, cmd) {
-  const res = checkCommand(state, cmd);
-  if (!res.ok) return { ok: false, reason: res.reason };
-  const { state: next, events } = applyCommand(state, cmd, res);
-  return { ok: true, state: next, events };
-}
-
-/** Observable state holder. */
-export function createStore(initialState, bus = null) {
-  let state = initialState;
   return {
-    get: () => state,
-    set(next, meta = {}) {
-      state = next;
-      bus?.emit('state:changed', { state, ...meta });
+    id: spec.id,
+    name: spec.name ?? cls.label ?? spec.id,
+    role: spec.role ?? (spec.classId === 'goblin' ? 'enemy' : 'player'),
+    classId: spec.classId,
+    player: spec.player ?? null,
+    color: spec.color ?? cls.color ?? '#FFFFFF',
+    initial: spec.initial ?? cls.initial ?? '?',
+    tokenUrl: spec.tokenUrl ?? null,
+    position: {
+      x: spec.position?.x ?? spec.x ?? 0,
+      y: spec.position?.y ?? spec.y ?? 0
     },
+    hp: spec.hp ?? maxHp,
+    maxHp,
+    mp: spec.mp ?? maxMp,
+    maxMp,
+    ap: spec.ap ?? maxAp,
+    maxAp,
+    abilities: spec.abilities ? [...spec.abilities] : [...(cls.abilities || [])],
+    alive: spec.alive ?? true
   };
 }
 
-/** Deterministic FNV-1a hash of the state, used to prove replay determinism. */
-export function hashState(state) {
-  const json = JSON.stringify(state);
-  let h = 0x811c9dc5;
-  for (let i = 0; i < json.length; i++) {
-    h ^= json.charCodeAt(i);
-    h = Math.imul(h, 0x01000193) >>> 0;
+/**
+ * Creates initial game state for a given seed.
+ * @param {string} [seed=CONFIG.DEFAULT_SEED]
+ * @returns {object} Initial GameState
+ */
+export function createInitialState(seed = CONFIG.DEFAULT_SEED) {
+  const dungeon = generateDungeon(seed);
+  const entities = {};
+
+  // Heroes from HERO_ROSTER + dungeon hero spawns
+  for (const hero of HERO_ROSTER) {
+    const spawnPos = dungeon.spawns.heroes[hero.id] || { x: 2, y: 10 };
+    entities[hero.id] = createEntity({
+      ...hero,
+      role: 'player',
+      position: { x: spawnPos.x, y: spawnPos.y }
+    });
   }
-  return h.toString(16).padStart(8, '0');
+
+  // Goblins from dungeon enemy spawns + CLASSES.goblin
+  const enemySpawns = dungeon.spawns.enemies || [];
+  for (let i = 0; i < enemySpawns.length; i++) {
+    const spawn = enemySpawns[i];
+    entities[spawn.id] = createEntity({
+      id: spawn.id,
+      name: `Goblin ${i + 1}`,
+      classId: 'goblin',
+      role: 'enemy',
+      position: { x: spawn.x, y: spawn.y }
+    });
+  }
+
+  // Objects dictionary
+  const objects = {};
+  const objList = Array.isArray(dungeon.objects) ? dungeon.objects : Object.values(dungeon.objects || {});
+  for (const obj of objList) {
+    objects[obj.id] = {
+      ...obj,
+      position: { ...obj.position },
+      loot: obj.loot ? obj.loot.map(l => ({ ...l })) : []
+    };
+  }
+
+  return {
+    version: 1,
+    seed,
+    status: 'playing',
+    phase: PHASE.HERO,
+    round: 1,
+    turnIndex: 0,
+    activeId: 'hero_warrior',
+    map: dungeon.map,
+    entities,
+    objects,
+    inventory: [{ id: 'health_potion', qty: 2 }],
+    seq: 0
+  };
+}
+
+/**
+ * Deep clones state safely using structuredClone.
+ * @param {object} s
+ * @returns {object}
+ */
+export function cloneState(s) {
+  return structuredClone(s);
+}
+
+/**
+ * Computes deterministic hash of state.
+ * @param {object} s
+ * @returns {string} 8 hex characters
+ */
+export function stateHash(s) {
+  return hashString(JSON.stringify(s));
+}
+
+// Pure Selectors
+export function getEntity(s, id) {
+  return s?.entities?.[id] || null;
+}
+
+export function getActive(s) {
+  return s?.entities?.[s?.activeId] || null;
+}
+
+export function getAliveHeroes(s) {
+  if (!s || !s.entities) return [];
+  return Object.values(s.entities).filter(e => e.role === 'player' && e.alive);
+}
+
+export function getAliveEnemies(s) {
+  if (!s || !s.entities) return [];
+  return Object.values(s.entities).filter(e => e.role === 'enemy' && e.alive);
+}
+
+export function getEntityAt(s, x, y) {
+  if (!s || !s.entities) return null;
+  return Object.values(s.entities).find(e => e.alive && e.position?.x === x && e.position?.y === y) || null;
+}
+
+export function getObject(s, id) {
+  return s?.objects?.[id] || null;
+}
+
+// Reducers
+/**
+ * Applies movement to an entity. Never mutates input state.
+ * @param {object} s
+ * @param {string} id
+ * @param {{ x: number, y: number }} to
+ * @param {number} cost
+ * @returns {{ state: object, events: object[] }}
+ */
+export function applyMove(s, id, to, cost) {
+  const next = cloneState(s);
+  const e = next.entities[id];
+  const from = { ...e.position };
+  e.position = { x: to.x, y: to.y };
+  e.mp = Math.max(0, e.mp - cost);
+
+  const events = [{
+    type: 'move',
+    id,
+    from,
+    to: { x: to.x, y: to.y },
+    cost
+  }];
+
+  return { state: next, events };
+}
+
+/**
+ * Applies basic ability use (damage). Never mutates input state.
+ * @param {object} s
+ * @param {{ caster_id: string, ability_id: string, target_id: string }} action
+ * @returns {{ state: object, events: object[] }}
+ */
+export function applyAbilityBasic(s, { caster_id, ability_id, target_id }) {
+  const next = cloneState(s);
+  const caster = next.entities[caster_id];
+  const ability = ABILITIES[ability_id];
+  const target = next.entities[target_id];
+
+  const apCost = ability?.apCost ?? 1;
+  if (caster) {
+    caster.ap = Math.max(0, caster.ap - apCost);
+  }
+
+  const damage = ability?.effect?.amount ?? 0;
+  if (target) {
+    target.hp = Math.max(0, target.hp - damage);
+    if (target.hp === 0) {
+      target.alive = false;
+    }
+  }
+
+  const events = [{
+    type: 'damage',
+    id: target_id,
+    sourceId: caster_id,
+    abilityId: ability_id,
+    amount: damage,
+    hp: target ? target.hp : 0
+  }];
+
+  return { state: next, events };
+}
+
+/**
+ * Applies end turn request. Emits end_turn_requested without state field changes.
+ * @param {object} s
+ * @param {{ character_id: string }} action
+ * @returns {{ state: object, events: object[] }}
+ */
+export function applyEndTurn(s, { character_id }) {
+  return {
+    state: cloneState(s),
+    events: [{ type: 'end_turn_requested', id: character_id }]
+  };
+}
+
+/**
+ * Creates state store with pub/sub emission.
+ * @param {object} initial Initial state
+ * @param {object} bus Event bus
+ * @returns {{ getState: () => object, commit: (next: object, events?: object[]) => void, reset: (snapshot: object) => void }}
+ */
+export function createStore(initial, bus) {
+  let state = initial;
+  return {
+    getState: () => state,
+    commit(next, events = []) {
+      state = { ...next, seq: (state.seq || 0) + 1 };
+      bus?.emit('state:changed', { state, events });
+    },
+    reset(snapshot) {
+      state = cloneState(snapshot);
+      bus?.emit('state:changed', { state, events: [{ type: 'reset' }] });
+    }
+  };
 }
