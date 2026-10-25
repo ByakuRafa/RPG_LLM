@@ -142,7 +142,7 @@ export function describeEvent(event, state) {
       const obj = state?.objects?.[event.objectId] || { name: event.objectId };
       const actor = state?.entities?.[event.byId] || { name: event.byId };
       const lootStr = Array.isArray(event.loot) && event.loot.length > 0
-        ? event.loot.map(l => `${l.qty}x ${l.id}`).join(', ')
+        ? event.loot.map(l => `${l.qty}x ${l.id === 'health_potion' ? 'Poção de Vida' : l.id === 'gold_coins' ? 'Moedas de Ouro' : l.id}`).join(', ')
         : '';
       return {
         level: 'SUCCESS',
@@ -153,7 +153,8 @@ export function describeEvent(event, state) {
     case 'item_used': {
       const actor = state?.entities?.[event.byId] || { name: event.byId };
       const target = state?.entities?.[event.targetId] || { name: event.targetId };
-      const item = { id: event.itemId, label: event.itemId };
+      const itemLabel = event.itemId === 'health_potion' ? 'Poção de Vida' : event.itemId === 'gold_coins' ? 'Moedas de Ouro' : event.itemId;
+      const item = { id: event.itemId, label: itemLabel };
       return {
         level: 'SUCCESS',
         text: MSG.itemUsed(actor, item, target)
@@ -163,7 +164,7 @@ export function describeEvent(event, state) {
     case 'inventory': {
       const actor = state?.entities?.[event.byId] || { name: event.byId };
       const itemsStr = Array.isArray(event.items) && event.items.length > 0
-        ? event.items.map(it => `${it.qty}x ${it.id}`).join(', ')
+        ? event.items.map(it => `${it.qty}x ${it.id === 'health_potion' ? 'Poção de Vida' : it.id === 'gold_coins' ? 'Moedas de Ouro' : it.id}`).join(', ')
         : 'vazio';
       return {
         level: 'INFO',

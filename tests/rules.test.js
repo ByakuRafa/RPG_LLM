@@ -23,6 +23,8 @@ import {
   evaluateGameOver
 } from '../src/engine/gameState.js';
 import { TOOLS, TOOL_NAMES } from '../src/engine/tools.js';
+import { normalizeBatch, validateBatch } from '../src/core/schema.js';
+import { describeEvent } from '../src/core/messages.js';
 
 describe('Validação de Habilidades (validateUseAbility)', () => {
   it('valida uso de habilidade corpo a corpo (slash) com sucesso', () => {
@@ -241,6 +243,25 @@ describe('Validação de Habilidades (validateUseAbility)', () => {
     assertEqual(resOcc.resolved.pushTo, null);
     assertEqual(resOcc.resolved.pushBlockedReason, 'occupied');
   });
+
+  it('detecta bloqueio de empurrão por borda do mapa (edge)', () => {
+    const sEdge = makeTestState([
+      '####',
+      '#WG#',
+      '####',
+    ]);
+    // Coloca o goblin na borda leste do mapa (x = width - 1)
+    sEdge.entities.goblin_1.position = { x: sEdge.map.width - 1, y: 1 };
+    sEdge.entities.hero_warrior.position = { x: sEdge.map.width - 2, y: 1 };
+    const resEdge = validateUseAbility(sEdge, {
+      caster_id: 'hero_warrior',
+      ability_id: 'shield_bash',
+      target_id: 'goblin_1'
+    });
+    assertEqual(resEdge.ok, true);
+    assertEqual(resEdge.resolved.pushTo, null);
+    assertEqual(resEdge.resolved.pushBlockedReason, 'edge');
+  });
 });
 
 describe('Validação de Itens (validateUseItem)', () => {
@@ -329,6 +350,31 @@ describe('Validação de Itens (validateUseItem)', () => {
     assertEqual(resTooFar.ok, false);
     assertEqual(resTooFar.code, 'OUT_OF_RANGE');
   });
+
+  it('rejeita uso de item em aliado morto (TARGET_DEAD) ou alvo desconhecido (UNKNOWN_TARGET)', () => {
+    const s = makeTestState([
+      '#####',
+      '#WM.#',
+      '#####',
+    ]);
+    s.entities.hero_mage.alive = false;
+    s.entities.hero_mage.hp = 0;
+    const resDead = validateUseItem(s, {
+      character_id: 'hero_warrior',
+      item_id: 'health_potion',
+      target_id: 'hero_mage'
+    });
+    assertEqual(resDead.ok, false);
+    assertEqual(resDead.code, 'TARGET_DEAD');
+
+    const resUnknown = validateUseItem(s, {
+      character_id: 'hero_warrior',
+      item_id: 'health_potion',
+      target_id: 'fantasma'
+    });
+    assertEqual(resUnknown.ok, false);
+    assertEqual(resUnknown.code, 'UNKNOWN_TARGET');
+  });
 });
 
 describe('Validação de Interação com Objetos (validateInteract)', () => {
@@ -387,6 +433,52 @@ describe('Validação de Interação com Objetos (validateInteract)', () => {
     });
     assertEqual(res.ok, false);
     assertEqual(res.code, 'ALREADY_OPENED');
+  });
+
+  it('rejeita interação com objeto inexistente (UNKNOWN_OBJECT) ou sem AP (NO_AP)', () => {
+    const s = makeTestState([
+      '#####',
+      '#WC.#',
+      '#####',
+    ]);
+    const resUnknown = validateInteract(s, {
+      character_id: 'hero_warrior',
+      object_id: 'bau_inexistente'
+    });
+    assertEqual(resUnknown.ok, false);
+    assertEqual(resUnknown.code, 'UNKNOWN_OBJECT');
+
+    s.entities.hero_warrior.ap = 0;
+    const resNoAp = validateInteract(s, {
+      character_id: 'hero_warrior',
+      object_id: 'chest_1'
+    });
+    assertEqual(resNoAp.ok, false);
+    assertEqual(resNoAp.code, 'NO_AP');
+  });
+});
+
+describe('Validação de Consulta de Inventário (validateCheckInventory)', () => {
+  it('valida consulta pelo personagem ativo e rejeita se não for a vez ou jogo encerrado', () => {
+    const s = makeTestState([
+      '#####',
+      '#WM.#',
+      '#####',
+    ]);
+    // Personagem ativo (Thorin)
+    const resOk = validateCheckInventory(s, { character_id: 'hero_warrior' });
+    assertEqual(resOk.ok, true);
+
+    // Mago não ativo tentando consultar
+    const resNotTurn = validateCheckInventory(s, { character_id: 'hero_mage' });
+    assertEqual(resNotTurn.ok, false);
+    assertEqual(resNotTurn.code, 'NOT_YOUR_TURN');
+
+    // Jogo encerrado
+    s.phase = PHASE.GAME_OVER;
+    const resGameOver = validateCheckInventory(s, { character_id: 'hero_warrior' });
+    assertEqual(resGameOver.ok, false);
+    assertEqual(resGameOver.code, 'GAME_OVER');
   });
 });
 
@@ -522,5 +614,133 @@ describe('Reducers do Jogo (applyDamage, applyHeal, applyAbility, applyUseItem, 
       assert(typeof TOOLS[name].validate === 'function');
       assert(typeof TOOLS[name].apply === 'function');
     }
+  });
+
+  it('applyAbility com shield_bash quando bloqueado emite evento push_blocked', () => {
+    const s = makeTestState([
+      '#####',
+      '#WG##',
+      '#####',
+    ]);
+    const { state: next, events } = applyAbility(s, {
+      caster_id: 'hero_warrior',
+      ability_id: 'shield_bash',
+      target_id: 'goblin_1'
+    }, {
+      ability: { effect: { type: 'damage', amount: 4, push: 1 } },
+      pushTo: null,
+      pushBlockedReason: 'wall'
+    });
+
+    assertEqual(next.entities.goblin_1.position.x, 2, 'Posição do goblin não muda quando bloqueado');
+    assert(events.some(e => e.type === 'push_blocked' && e.reason === 'wall'));
+  });
+
+  it('applyAbility com heal_pulse recupera HP e emite evento heal', () => {
+    const s = makeTestState([
+      '#####',
+      '#WM.#',
+      '#####',
+    ]);
+    s.entities.hero_warrior.hp = 10;
+    const { state: next, events } = applyAbility(s, {
+      caster_id: 'hero_mage',
+      ability_id: 'heal_pulse',
+      target_id: 'hero_warrior'
+    }, {
+      ability: { effect: { type: 'heal', amount: 8 } }
+    });
+
+    assertEqual(next.entities.hero_warrior.hp, 18);
+    const healEvent = events.find(e => e.type === 'heal');
+    assert(healEvent !== undefined);
+    assertEqual(healEvent.amount, 8);
+    assertEqual(healEvent.via, 'heal_pulse');
+  });
+
+  it('applyAbility com lockpick destranca o objeto e emite evento unlocked', () => {
+    const s = makeTestState([
+      '#####',
+      '#RL.#',
+      '#####',
+    ]);
+    const { state: next, events } = applyAbility(s, {
+      caster_id: 'hero_rogue',
+      ability_id: 'lockpick',
+      target_id: 'chest_1'
+    }, {
+      ability: { effect: { type: 'unlock' } }
+    });
+
+    assertEqual(next.objects.chest_1.locked, false);
+    const unlockEvent = events.find(e => e.type === 'unlocked');
+    assert(unlockEvent !== undefined);
+    assertEqual(unlockEvent.objectId, 'chest_1');
+    assertEqual(unlockEvent.byId, 'hero_rogue');
+  });
+
+  it('applyDamage em herói causa derrota (lost) quando todos os heróis morrem', () => {
+    const s = makeTestState([
+      '#####',
+      '#W.G#',
+      '#####',
+    ]);
+    const { state: next, events } = applyDamage(s, 'hero_warrior', 100);
+    assertEqual(next.entities.hero_warrior.hp, 0);
+    assertEqual(next.entities.hero_warrior.alive, false);
+    assertEqual(next.status, 'lost');
+    assertEqual(next.phase, PHASE.GAME_OVER);
+    assert(events.some(e => e.type === 'game_over' && e.status === 'lost'));
+  });
+});
+
+describe('Integração de Schema e Mensagens (Sprint 2)', () => {
+  it('normalizeBatch preenche target_id padrão = character_id em use_item', () => {
+    const raw = {
+      source: 'TEST',
+      tool_calls: [
+        { name: 'use_item', arguments: { character_id: 'hero_warrior', item_id: 'health_potion' } }
+      ]
+    };
+    const norm = normalizeBatch(raw);
+    assertEqual(norm.tool_calls[0].arguments.target_id, 'hero_warrior');
+    const val = validateBatch(norm);
+    assertEqual(val.ok, true);
+  });
+
+  it('validateBatch valida e rejeita argumentos ausentes para todas as 6 ferramentas', () => {
+    const invalidBatch = {
+      tool_calls: [
+        { name: 'use_item', arguments: { character_id: 'hero_warrior' } }, // missing item_id
+        { name: 'interact_object', arguments: { character_id: 'hero_warrior' } }, // missing object_id
+        { name: 'check_inventory', arguments: {} } // missing character_id
+      ]
+    };
+    const val = validateBatch(invalidBatch);
+    assertEqual(val.ok, false);
+    assertEqual(val.errors.length, 3);
+  });
+
+  it('describeEvent gera descrições amigáveis em PT-BR para todos os novos eventos visuais', () => {
+    const s = makeTestState(['#####', '#WC.#', '#####']);
+    const evItem = describeEvent({ type: 'item_used', itemId: 'health_potion', byId: 'hero_warrior', targetId: 'hero_warrior' }, s);
+    assertEqual(evItem.level, 'SUCCESS');
+    assert(evItem.text.includes('Poção de Vida'));
+
+    const evChest = describeEvent({ type: 'chest_opened', objectId: 'chest_1', byId: 'hero_warrior', loot: [{ id: 'health_potion', qty: 2 }] }, s);
+    assertEqual(evChest.level, 'SUCCESS');
+    assert(evChest.text.includes('2x Poção de Vida'));
+
+    const evInv = describeEvent({ type: 'inventory', byId: 'hero_warrior', items: [{ id: 'gold_coins', qty: 10 }] }, s);
+    assertEqual(evInv.level, 'INFO');
+    assert(evInv.text.includes('10x Moedas de Ouro'));
+
+    const evUnlock = describeEvent({ type: 'unlocked', objectId: 'chest_1', byId: 'hero_rogue' }, s);
+    assertEqual(evUnlock.level, 'SUCCESS');
+    assert(evUnlock.text.includes('destrancou'));
+
+    const evPushBlocked = describeEvent({ type: 'push_blocked', id: 'goblin_1', reason: 'wall' }, s);
+    assertEqual(evPushBlocked.level, 'INFO');
+    assert(evPushBlocked.text.includes('parede no caminho'));
   });
 });
