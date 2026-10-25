@@ -202,7 +202,8 @@ export function createGameMaster({ store, queue, bus = null, llm, getSettings = 
       trace.rawFirst = res1.text;
       lastRawResponse = res1.text;
 
-      let out = parseAndValidate(res1.text);
+      const curState = store.getState();
+      let out = parseAndValidate(res1.text, null, curState);
 
       if (out.ok) {
         trace.jsonValidFirstTry = true;
@@ -229,7 +230,7 @@ export function createGameMaster({ store, queue, bus = null, llm, getSettings = 
         trace.rawRepair = resRepair.text;
         lastRawResponse = resRepair.text;
 
-        out = parseAndValidate(resRepair.text);
+        out = parseAndValidate(resRepair.text, null, curState);
         if (out.ok) {
           trace.repaired = true;
           bus?.emit('log:entry', {
@@ -243,16 +244,17 @@ export function createGameMaster({ store, queue, bus = null, llm, getSettings = 
 
       if (!out.ok) {
         trace.schemaErrors = out.errors || [out.error || 'Erro de esquema JSON'];
+        const errorDetail = out.errors?.join(' | ') || out.error || 'Erro desconhecido';
         bus?.emit('log:entry', {
           level: 'ERROR',
-          text: '[ERROR] O Mestre respondeu em formato inválido.',
+          text: `[ERROR] O Mestre respondeu em formato inválido: ${errorDetail}`,
           source: 'LLM',
           ts: Date.now()
         });
         if (source !== 'BENCHMARK') {
           bus?.emit('chat:system', {
             level: 'error',
-            text: 'O Mestre respondeu em formato inválido e não pôde agir.'
+            text: `O Mestre respondeu em formato inválido e não pôde agir: ${errorDetail}`
           });
         }
         return trace;

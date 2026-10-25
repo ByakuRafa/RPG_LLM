@@ -119,7 +119,7 @@ export function extractJson(text) {
  * @param {object|Array} obj
  * @returns {{ narrative: string, tool_calls: Array, flags: { aliasUsed: boolean, coerced: boolean } }}
  */
-export function normalizeEnvelope(obj) {
+export function normalizeEnvelope(obj, state = null) {
   let narrative = '';
   const flags = {
     aliasUsed: false,
@@ -173,7 +173,7 @@ export function normalizeEnvelope(obj) {
     };
   });
 
-  const batch = normalizeBatch({ tool_calls: callsWithParsedArgs });
+  const batch = normalizeBatch({ tool_calls: callsWithParsedArgs }, state);
 
   if (batch.tool_calls.some((c) => c && c.coerced)) {
     flags.coerced = true;
@@ -208,7 +208,7 @@ export function buildRepairTurn(error) {
  * @param {object|null} [customTools=null]
  * @returns {{ ok: boolean, error: string|null, errors: string[], envelope: object|null, calls: Array, flags: object }}
  */
-export function parseAndValidate(text, customTools = null) {
+export function parseAndValidate(text, customTools = null, state = null) {
   const jsonRes = extractJson(text);
   if (!jsonRes.ok) {
     return {
@@ -221,7 +221,7 @@ export function parseAndValidate(text, customTools = null) {
     };
   }
 
-  const envelope = normalizeEnvelope(jsonRes.value);
+  const envelope = normalizeEnvelope(jsonRes.value, state);
   const valRes = validateBatch({ tool_calls: envelope.tool_calls }, customTools);
 
   if (!valRes.ok) {
@@ -249,8 +249,8 @@ export function parseAndValidate(text, customTools = null) {
  * Legacy wrapper for backwards compatibility with tests.
  * @param {string} text
  */
-export function parseLLMResponse(text) {
-  const res = parseAndValidate(text);
+export function parseLLMResponse(text, state = null) {
+  const res = parseAndValidate(text, null, state);
   if (res.ok) {
     return {
       ok: true,

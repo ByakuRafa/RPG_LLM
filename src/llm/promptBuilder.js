@@ -48,12 +48,12 @@ Sua resposta DEVE ser estritamente um objeto JSON com duas chaves:
    - Paredes (#) e outras criaturas vivas bloqueiam movimento.
 
 2. use_ability:
-   - Argumentos: { "caster_id": string, "ability_id": string, "target_id": string (opcional), "target_x": integer (opcional), "target_y": integer (opcional) }
-   - Custa 1 AP (Pontos de Ação). O conjurador DEVE ser o herói ativo.
-   - A habilidade deve pertencer à classe do herói ativo e o alvo deve estar dentro do alcance (range) e com linha de visão.
-   - Habilidades ofensivas (slash, shield_bash, firebolt, backstab) exigem alvo inimigo vivo.
-   - Habilidades de cura (heal_pulse) exigem alvo aliado vivo (ou o próprio conjurador).
-   - Habilidades de objeto (lockpick) exigem alvo baú adjacente.
+   - Argumentos: { "caster_id": string, "ability_id": string, "target_id": string }
+   - Custa 1 AP (Pontos de Ação). O conjurador DEVE ser o herói ativo ("active_character.id").
+   - A habilidade deve pertencer à classe do herói ativo e o alvo ("target_id") deve estar dentro do alcance (range) e com linha de visão.
+   - Habilidades ofensivas (slash, shield_bash, firebolt, backstab) exigem alvo inimigo vivo ("target_id").
+   - Habilidades de cura (heal_pulse) exigem alvo aliado vivo ou o próprio conjurador ("target_id").
+   - Habilidades de objeto (lockpick) exigem alvo baú adjacente ("target_id").
 
 3. use_item:
    - Argumentos: { "character_id": string, "item_id": string, "target_id": string (opcional, padrão = character_id) }
@@ -195,7 +195,7 @@ export function buildStateSnapshot(state, config = 'B') {
 
   // Party members (all other heroes sorted by ID)
   const party = Object.values(state?.entities || {})
-    .filter((e) => e.role === 'hero' && e.id !== activeId)
+    .filter((e) => (e.role === 'player' || e.role === 'hero') && e.id !== activeId)
     .sort((a, b) => a.id.localeCompare(b.id))
     .map((h) => ({
       id: h.id,
