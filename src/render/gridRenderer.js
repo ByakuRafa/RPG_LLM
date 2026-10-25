@@ -5,7 +5,13 @@
  */
 import { CONFIG, TILE } from "../core/config.js";
 import { loadSettings } from "../core/settings.js";
-import { CLASSES, CHEST_TOKENS } from "../engine/catalog.js";
+import * as Catalog from "../engine/catalog.js";
+
+export const CLASSES = Catalog.CLASSES || {};
+export const CHEST_TOKENS = Catalog.CHEST_TOKENS || {
+  closed: "./assets/tokens/chest_closed_64.png",
+  opened: "./assets/tokens/chest_opened_64.png"
+};
 
 const TILE_SIZE = CONFIG.TILE_SIZE || 64;
 
