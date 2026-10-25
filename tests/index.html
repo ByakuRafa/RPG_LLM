@@ -164,9 +164,12 @@
     import './engine.test.js';
     import './rules.test.js';
     import './llm.test.js';
+    import './fixtures.test.js';
 
     const root = document.getElementById('test-root');
-    await run(root);
+    const res = await run(root);
+    window.__TEST_RES__ = res;
+    console.log('TEST_RUN_DONE', JSON.stringify({ passed: res.passed, failed: res.failed, total: res.total }));
   </script>
 </body>
 </html>
