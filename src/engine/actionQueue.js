@@ -78,7 +78,7 @@ export function createActionQueue({ store, bus, tools, animator = null, stepDela
     const applied = [];
     const source = batch?.source || 'UNKNOWN';
     const normalized = normalizeBatch(batch);
-    const v = validateBatch(normalized);
+    const v = validateBatch(normalized, tools);
 
     if (!v.ok) {
       log('REJECTED', v.errors.join('; '), source);

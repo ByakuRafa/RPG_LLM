@@ -10,19 +10,44 @@ export const TOOL_SPECS = Object.freeze({
       character_id: 'id',
       target_x: 'int',
       target_y: 'int'
-    })
+    }),
+    optional: Object.freeze({})
   }),
   use_ability: Object.freeze({
     required: Object.freeze({
       caster_id: 'id',
       ability_id: 'id',
       target_id: 'id'
+    }),
+    optional: Object.freeze({})
+  }),
+  use_item: Object.freeze({
+    required: Object.freeze({
+      character_id: 'id',
+      item_id: 'id'
+    }),
+    optional: Object.freeze({
+      target_id: 'id'
     })
+  }),
+  interact_object: Object.freeze({
+    required: Object.freeze({
+      character_id: 'id',
+      object_id: 'id'
+    }),
+    optional: Object.freeze({})
+  }),
+  check_inventory: Object.freeze({
+    required: Object.freeze({
+      character_id: 'id'
+    }),
+    optional: Object.freeze({})
   }),
   end_turn: Object.freeze({
     required: Object.freeze({
       character_id: 'id'
-    })
+    }),
+    optional: Object.freeze({})
   })
 });
 
@@ -32,6 +57,7 @@ export const TOOL_SPECS = Object.freeze({
  * - Trims and lowercases tool names.
  * - Drops null or undefined argument values.
  * - Coerces numeric strings on int fields and flags `coerced: true` on that call.
+ * - Defaults `use_item.target_id` to `character_id`.
  *
  * @param {object|Array} raw
  * @returns {{ source?: string, tool_calls: Array }} Normalized batch
@@ -67,13 +93,20 @@ export function normalizeBatch(raw) {
           continue;
         }
 
-        const expectedType = spec?.required?.[key];
+        const expectedType = spec?.required?.[key] || spec?.optional?.[key];
         if (expectedType === 'int' && typeof val === 'string' && /^-?\d+$/.test(val.trim())) {
           normArgs[key] = parseInt(val.trim(), 10);
           callWasCoerced = true;
         } else {
           normArgs[key] = val;
         }
+      }
+    }
+
+    // Default use_item.target_id to character_id
+    if (rawName === 'use_item') {
+      if ((normArgs.target_id === undefined || normArgs.target_id === null || normArgs.target_id === '') && normArgs.character_id) {
+        normArgs.target_id = normArgs.character_id;
       }
     }
 
@@ -102,9 +135,10 @@ export function normalizeBatch(raw) {
  * Validates a normalized batch of tool calls against TOOL_SPECS.
  *
  * @param {object} batch
+ * @param {object|null} [customTools=null] Optional tool registry for custom test tools
  * @returns {{ ok: boolean, errors: string[], calls: Array }}
  */
-export function validateBatch(batch) {
+export function validateBatch(batch, customTools = null) {
   const maxCalls = CONFIG.MAX_TOOL_CALLS ?? 4;
   const errors = [];
 
@@ -136,7 +170,7 @@ export function validateBatch(batch) {
       continue;
     }
 
-    const spec = TOOL_SPECS[call.name];
+    const spec = TOOL_SPECS[call.name] || (customTools && customTools[call.name]?.spec) || (customTools && customTools[call.name] ? { required: {}, optional: {} } : null);
     if (!spec) {
       errors.push(`${prefix}: UNKNOWN_TOOL "${call.name}".`);
       continue;
@@ -148,8 +182,11 @@ export function validateBatch(batch) {
       continue;
     }
 
+    const required = spec.required || {};
+    const optional = spec.optional || {};
+
     // Check required fields and types
-    for (const [field, expectedType] of Object.entries(spec.required || {})) {
+    for (const [field, expectedType] of Object.entries(required)) {
       if (!(field in args)) {
         errors.push(`${prefix} (${call.name}): Argumento obrigatório ausente: "${field}".`);
         continue;
@@ -167,10 +204,28 @@ export function validateBatch(batch) {
       }
     }
 
-    // Check for unexpected/unknown arguments
-    for (const key of Object.keys(args)) {
-      if (!spec.required?.[key]) {
-        errors.push(`${prefix} (${call.name}): Argumento desconhecido rejeitado: "${key}".`);
+    // Check optional fields if present
+    for (const [field, expectedType] of Object.entries(optional)) {
+      if (field in args && args[field] !== undefined && args[field] !== null) {
+        const val = args[field];
+        if (expectedType === 'id') {
+          if (typeof val !== 'string' || val.trim().length === 0) {
+            errors.push(`${prefix} (${call.name}): Argumento opcional "${field}" deve ser um ID em string não vazia.`);
+          }
+        } else if (expectedType === 'int') {
+          if (typeof val !== 'number' || !Number.isInteger(val)) {
+            errors.push(`${prefix} (${call.name}): Argumento opcional "${field}" deve ser um número inteiro.`);
+          }
+        }
+      }
+    }
+
+    // Check for unexpected/unknown arguments (only if spec defines required or optional)
+    if (Object.keys(required).length > 0 || Object.keys(optional).length > 0) {
+      for (const key of Object.keys(args)) {
+        if (!required[key] && !optional[key]) {
+          errors.push(`${prefix} (${call.name}): Argumento desconhecido rejeitado: "${key}".`);
+        }
       }
     }
   }

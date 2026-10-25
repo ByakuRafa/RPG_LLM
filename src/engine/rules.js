@@ -5,9 +5,39 @@
 import { CONFIG, PHASE } from '../core/config.js';
 import { REJECT } from '../core/messages.js';
 import { inBounds, isWallAt, getBlockerAt, manhattan, computeReachable, key } from './pathfinding.js';
-import { ABILITIES } from './catalog.js';
+import { ABILITIES, ITEMS, isHostile } from './catalog.js';
+
+export { isHostile };
 
 const ALLOWED_ENEMY_SOURCES = new Set(['ENEMY_AI', 'HUMAN_GM', 'TEST']);
+
+/**
+ * Checks whether two positions are orthogonally adjacent (Manhattan distance === 1).
+ * @param {{ x: number, y: number }} posA
+ * @param {{ x: number, y: number }} posB
+ * @returns {boolean}
+ */
+export function isAdjacent(posA, posB) {
+  if (!posA || !posB) return false;
+  return manhattan(posA.x, posA.y, posB.x, posB.y) === 1;
+}
+
+/**
+ * Resolves an ID to either an entity or an object.
+ * @param {object} s GameState
+ * @param {string} id
+ * @returns {{ kind: 'entity' | 'object', ref: object } | null}
+ */
+export function resolveTarget(s, id) {
+  if (!s || !id) return null;
+  if (s.entities && s.entities[id]) {
+    return { kind: 'entity', ref: s.entities[id] };
+  }
+  if (s.objects && s.objects[id]) {
+    return { kind: 'object', ref: s.objects[id] };
+  }
+  return null;
+}
 
 /**
  * Checks whether the game is currently playable.
@@ -15,7 +45,7 @@ const ALLOWED_ENEMY_SOURCES = new Set(['ENEMY_AI', 'HUMAN_GM', 'TEST']);
  * @returns {{ ok: false, code: string, message: string } | null}
  */
 export function checkPlaying(s) {
-  if (s.phase === PHASE.GAME_OVER || s.gameOver) {
+  if (s.phase === PHASE.GAME_OVER || s.gameOver || s.status === 'won' || s.status === 'lost') {
     return { ok: false, code: 'GAME_OVER', message: REJECT.GAME_OVER() };
   }
   return null;
@@ -57,7 +87,7 @@ export function checkActor(s, id, ctx = {}) {
       return { ok: false, code: 'NOT_YOUR_TURN', message: REJECT.NOT_YOUR_TURN(actor) };
     }
   } else {
-    return { ok: false, code: 'NOT_YOUR_TURN', message: REJECT.NOT_YOUR_TURN(actor) };
+    return { ok: false, code: 'WRONG_PHASE', message: REJECT.WRONG_PHASE({ phase: s.phase }) };
   }
 
   return null;
@@ -133,6 +163,260 @@ export function validateMove(s, { character_id, target_x, target_y }, ctx = {}) 
 }
 
 /**
+ * Validates use_ability action (Task 3.1):
+ * 1. Actor guards
+ * 2. UNKNOWN_ABILITY / ABILITY_NOT_OWNED
+ * 3. NO_AP (ap < apCost)
+ * 4. Resolve target -> UNKNOWN_TARGET
+ * 5. Type check: enemy -> hostile entity; ally -> same-side entity (self allowed); object -> object; otherwise INVALID_TARGET_TYPE
+ * 6. TARGET_DEAD
+ * 7. OUT_OF_RANGE (manhattan > range)
+ * 8. Lockpick on unlocked -> NOT_LOCKED
+ * Computes push destination and blocked reason if ability has push.
+ *
+ * @param {object} s GameState
+ * @param {{ caster_id: string, ability_id: string, target_id: string }} action
+ * @param {object} [ctx]
+ * @returns {{ ok: boolean, code?: string, message?: string, resolved?: object }}
+ */
+export function validateUseAbility(s, { caster_id, ability_id, target_id }, ctx = {}) {
+  // 1. Actor guards
+  const actorErr = checkActor(s, caster_id, ctx);
+  if (actorErr) return actorErr;
+
+  const actor = s.entities[caster_id];
+
+  // 2. UNKNOWN_ABILITY / ABILITY_NOT_OWNED
+  const ability = ABILITIES[ability_id];
+  if (!ability) {
+    return { ok: false, code: 'UNKNOWN_ABILITY', message: REJECT.UNKNOWN_ABILITY({ abilityId: ability_id }) };
+  }
+
+  if (!actor.abilities || !actor.abilities.includes(ability_id)) {
+    return {
+      ok: false,
+      code: 'ABILITY_NOT_OWNED',
+      message: REJECT.ABILITY_NOT_OWNED({ abilityId: ability_id, name: actor.name })
+    };
+  }
+
+  // 3. NO_AP
+  const apCost = ability.apCost ?? 1;
+  if (actor.ap < apCost) {
+    return { ok: false, code: 'NO_AP', message: REJECT.NO_AP(actor) };
+  }
+
+  // 4. Resolve target
+  const resolvedTarget = resolveTarget(s, target_id);
+  if (!resolvedTarget) {
+    return { ok: false, code: 'UNKNOWN_TARGET', message: REJECT.UNKNOWN_TARGET({ targetId: target_id }) };
+  }
+  const target = resolvedTarget.ref;
+
+  // 5. Type check
+  if (ability.target === 'enemy') {
+    if (resolvedTarget.kind !== 'entity' || !isHostile(actor, target)) {
+      return { ok: false, code: 'INVALID_TARGET_TYPE', message: REJECT.INVALID_TARGET_TYPE() };
+    }
+  } else if (ability.target === 'ally') {
+    if (resolvedTarget.kind !== 'entity' || isHostile(actor, target)) {
+      return { ok: false, code: 'INVALID_TARGET_TYPE', message: REJECT.INVALID_TARGET_TYPE() };
+    }
+  } else if (ability.target === 'object') {
+    if (resolvedTarget.kind !== 'object') {
+      return { ok: false, code: 'INVALID_TARGET_TYPE', message: REJECT.INVALID_TARGET_TYPE() };
+    }
+  } else {
+    return { ok: false, code: 'INVALID_TARGET_TYPE', message: REJECT.INVALID_TARGET_TYPE() };
+  }
+
+  // 6. TARGET_DEAD
+  if (resolvedTarget.kind === 'entity') {
+    if (!target.alive || (typeof target.hp === 'number' && target.hp <= 0)) {
+      return { ok: false, code: 'TARGET_DEAD', message: REJECT.TARGET_DEAD(target) };
+    }
+  }
+
+  // 7. OUT_OF_RANGE
+  const dist = manhattan(actor.position.x, actor.position.y, target.position.x, target.position.y);
+  const range = ability.range ?? 1;
+  if (dist > range) {
+    return { ok: false, code: 'OUT_OF_RANGE', message: REJECT.OUT_OF_RANGE({ range, distance: dist }) };
+  }
+
+  // 8. Lockpick on unlocked -> NOT_LOCKED
+  if (ability.effect?.type === 'unlock') {
+    if (!target.locked) {
+      return { ok: false, code: 'NOT_LOCKED', message: REJECT.NOT_LOCKED(target) };
+    }
+  }
+
+  // Push calculation
+  let pushTo = null;
+  let pushBlockedReason = null;
+  if (ability.effect?.push) {
+    const dx = Math.sign(target.position.x - actor.position.x);
+    const dy = Math.sign(target.position.y - actor.position.y);
+    const destX = target.position.x + dx;
+    const destY = target.position.y + dy;
+
+    if (!inBounds(s.map, destX, destY)) {
+      pushBlockedReason = 'edge';
+    } else if (isWallAt(s.map, destX, destY)) {
+      pushBlockedReason = 'wall';
+    } else if (getBlockerAt(s, destX, destY, { ignoreId: target.id })) {
+      pushBlockedReason = 'occupied';
+    } else {
+      pushTo = { x: destX, y: destY };
+    }
+  }
+
+  return {
+    ok: true,
+    resolved: {
+      ability,
+      target,
+      targetKind: resolvedTarget.kind,
+      distance: dist,
+      pushTo,
+      pushBlockedReason
+    }
+  };
+}
+
+/**
+ * Validates use_item action (Task 3.1):
+ * actor -> UNKNOWN_ITEM -> ITEM_NOT_IN_INVENTORY -> ITEM_NOT_USABLE -> NO_AP ->
+ * target must be a living ally (INVALID_TARGET_TYPE) -> OUT_OF_RANGE (manhattan > range; self = 0).
+ *
+ * @param {object} s GameState
+ * @param {{ character_id: string, item_id: string, target_id?: string }} action
+ * @param {object} [ctx]
+ * @returns {{ ok: boolean, code?: string, message?: string, resolved?: object }}
+ */
+export function validateUseItem(s, { character_id, item_id, target_id }, ctx = {}) {
+  // 1. Actor guards
+  const actorErr = checkActor(s, character_id, ctx);
+  if (actorErr) return actorErr;
+
+  const actor = s.entities[character_id];
+
+  // 2. UNKNOWN_ITEM
+  const item = ITEMS[item_id];
+  if (!item) {
+    return { ok: false, code: 'UNKNOWN_ITEM', message: REJECT.UNKNOWN_ITEM({ itemId: item_id }) };
+  }
+
+  // 3. ITEM_NOT_IN_INVENTORY
+  const invSlot = (s.inventory || []).find(it => it.id === item_id);
+  if (!invSlot || invSlot.qty < 1) {
+    return { ok: false, code: 'ITEM_NOT_IN_INVENTORY', message: REJECT.ITEM_NOT_IN_INVENTORY({ itemId: item_id }) };
+  }
+
+  // 4. ITEM_NOT_USABLE
+  if (!item.usable) {
+    return { ok: false, code: 'ITEM_NOT_USABLE', message: REJECT.ITEM_NOT_USABLE({ itemId: item_id }) };
+  }
+
+  // 5. NO_AP
+  if (actor.ap < 1) {
+    return { ok: false, code: 'NO_AP', message: REJECT.NO_AP(actor) };
+  }
+
+  // 6. Target must be a living ally
+  const targetId = target_id || character_id;
+  const target = s?.entities?.[targetId];
+  if (!target) {
+    return { ok: false, code: 'UNKNOWN_TARGET', message: REJECT.UNKNOWN_TARGET({ targetId }) };
+  }
+  if (isHostile(actor, target)) {
+    return { ok: false, code: 'INVALID_TARGET_TYPE', message: REJECT.INVALID_TARGET_TYPE() };
+  }
+  if (!target.alive || (typeof target.hp === 'number' && target.hp <= 0)) {
+    return { ok: false, code: 'TARGET_DEAD', message: REJECT.TARGET_DEAD(target) };
+  }
+
+  // 7. OUT_OF_RANGE
+  const dist = (actor.id === target.id) ? 0 : manhattan(actor.position.x, actor.position.y, target.position.x, target.position.y);
+  const range = item.range ?? 1;
+  if (dist > range) {
+    return { ok: false, code: 'OUT_OF_RANGE', message: REJECT.OUT_OF_RANGE({ range, distance: dist }) };
+  }
+
+  return {
+    ok: true,
+    resolved: {
+      item,
+      target,
+      distance: dist
+    }
+  };
+}
+
+/**
+ * Validates interact_object action (Task 3.1):
+ * actor -> UNKNOWN_OBJECT -> NO_AP -> NOT_ADJACENT -> OBJECT_LOCKED -> ALREADY_OPENED.
+ *
+ * @param {object} s GameState
+ * @param {{ character_id: string, object_id: string }} action
+ * @param {object} [ctx]
+ * @returns {{ ok: boolean, code?: string, message?: string, resolved?: object }}
+ */
+export function validateInteract(s, { character_id, object_id }, ctx = {}) {
+  // 1. Actor guards
+  const actorErr = checkActor(s, character_id, ctx);
+  if (actorErr) return actorErr;
+
+  const actor = s.entities[character_id];
+
+  // 2. UNKNOWN_OBJECT
+  const obj = s?.objects?.[object_id];
+  if (!obj) {
+    return { ok: false, code: 'UNKNOWN_OBJECT', message: REJECT.UNKNOWN_OBJECT({ objectId: object_id }) };
+  }
+
+  // 3. NO_AP
+  if (actor.ap < 1) {
+    return { ok: false, code: 'NO_AP', message: REJECT.NO_AP(actor) };
+  }
+
+  // 4. NOT_ADJACENT
+  if (!isAdjacent(actor.position, obj.position)) {
+    return { ok: false, code: 'NOT_ADJACENT', message: REJECT.NOT_ADJACENT() };
+  }
+
+  // 5. OBJECT_LOCKED
+  if (obj.locked) {
+    return { ok: false, code: 'OBJECT_LOCKED', message: REJECT.OBJECT_LOCKED() };
+  }
+
+  // 6. ALREADY_OPENED
+  if (obj.opened) {
+    return { ok: false, code: 'ALREADY_OPENED', message: REJECT.ALREADY_OPENED() };
+  }
+
+  return {
+    ok: true,
+    resolved: {
+      object: obj
+    }
+  };
+}
+
+/**
+ * Validates check_inventory action (actor guards only).
+ * @param {object} s GameState
+ * @param {{ character_id: string }} action
+ * @param {object} [ctx]
+ * @returns {{ ok: boolean, code?: string, message?: string, resolved?: object }}
+ */
+export function validateCheckInventory(s, { character_id }, ctx = {}) {
+  const actorErr = checkActor(s, character_id, ctx);
+  if (actorErr) return actorErr;
+  return { ok: true, resolved: {} };
+}
+
+/**
  * Validates end_turn action (actor guards only).
  * @param {object} s GameState
  * @param {{ character_id: string }} action
@@ -146,38 +430,19 @@ export function validateEndTurn(s, { character_id }, ctx = {}) {
 }
 
 /**
- * Validates use_ability basic action (Sprint 1 subset):
- * Actor guards, NO_AP, ABILITY_NOT_OWNED, UNKNOWN_TARGET.
- *
- * @param {object} s GameState
- * @param {{ caster_id: string, ability_id: string, target_id: string }} action
- * @param {object} [ctx]
- * @returns {{ ok: boolean, code?: string, message?: string, resolved?: { ability: object, target: object } }}
+ * Alias for backward compatibility with Sprint 1 tests.
  */
-export function validateUseAbilityBasic(s, { caster_id, ability_id, target_id }, ctx = {}) {
-  const actorErr = checkActor(s, caster_id, ctx);
-  if (actorErr) return actorErr;
+export const validateUseAbilityBasic = validateUseAbility;
 
-  const actor = s.entities[caster_id];
-  const ability = ABILITIES[ability_id];
-  const apCost = ability?.apCost ?? 1;
-
-  if (actor.ap < apCost) {
-    return { ok: false, code: 'NO_AP', message: REJECT.NO_AP(actor) };
-  }
-
-  if (!actor.abilities || !actor.abilities.includes(ability_id)) {
-    return {
-      ok: false,
-      code: 'ABILITY_NOT_OWNED',
-      message: REJECT.ABILITY_NOT_OWNED({ abilityId: ability_id, name: actor.name })
-    };
-  }
-
-  const target = s?.entities?.[target_id] || s?.objects?.[target_id];
-  if (!target) {
-    return { ok: false, code: 'UNKNOWN_TARGET', message: REJECT.UNKNOWN_TARGET({ targetId: target_id }) };
-  }
-
-  return { ok: true, resolved: { ability, target } };
+/**
+ * Translates validation result into a formatted PT-BR explanation sentence.
+ * @param {{ ok: boolean, code?: string, message?: string }} result
+ * @returns {string}
+ */
+export function explain(result) {
+  if (!result) return 'Resultado indefinido.';
+  if (result.ok) return 'Ação válida.';
+  if (result.message) return result.message;
+  if (result.code && REJECT[result.code]) return REJECT[result.code]();
+  return 'Ação inválida.';
 }

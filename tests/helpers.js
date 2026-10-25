@@ -93,7 +93,8 @@ export function makeTestState(asciiRows, overrides = {}) {
           locked: false,
           opened: false,
           blocksMovement: true,
-          items: [{ id: 'health_potion', qty: 1 }]
+          items: [{ id: 'health_potion', qty: 1 }],
+          loot: [{ id: 'health_potion', qty: 1 }]
         };
       } else if (char === 'L') {
         chestCount++;
@@ -106,7 +107,8 @@ export function makeTestState(asciiRows, overrides = {}) {
           locked: true,
           opened: false,
           blocksMovement: true,
-          items: [{ id: 'health_potion', qty: 1 }, { id: 'gold_coins', qty: 25 }]
+          items: [{ id: 'health_potion', qty: 1 }, { id: 'gold_coins', qty: 25 }],
+          loot: [{ id: 'health_potion', qty: 1 }, { id: 'gold_coins', qty: 25 }]
         };
       }
     }
