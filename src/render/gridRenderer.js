@@ -102,30 +102,73 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE, getSetti
   function drawTiles(map) {
     if (!map || !map.grid) return;
 
+    // Pass 1: Floor tiles (warm limestone checkerboard modulation + inner mortar lines)
     for (let y = 0; y < map.height; y++) {
       for (let x = 0; x < map.width; x++) {
-        const t = map.grid[y][x];
-        const px = x * tileSize;
-        const py = y * tileSize;
-
-        if (t === TILE.WALL) {
-          ctx.fillStyle = "#21262d";
-          ctx.fillRect(px, py, tileSize, tileSize);
-
-          ctx.strokeStyle = "#30363d";
-          ctx.lineWidth = 1;
-          ctx.strokeRect(px + 0.5, py + 0.5, tileSize - 1, tileSize - 1);
-
-          ctx.fillStyle = "#161b22";
-          ctx.fillRect(px + 4, py + 4, tileSize - 8, tileSize - 8);
-        } else {
+        if (map.grid[y][x] === TILE.FLOOR) {
+          const px = x * tileSize;
+          const py = y * tileSize;
           const isEven = (x + y) % 2 === 0;
-          ctx.fillStyle = isEven ? "#0f141c" : "#141923";
+
+          // Warm limestone tiles (#EAE4D8 and #E2DDD0 checkerboard modulation)
+          ctx.fillStyle = isEven ? "#EAE4D8" : "#E2DDD0";
           ctx.fillRect(px, py, tileSize, tileSize);
 
-          ctx.strokeStyle = "rgba(255, 255, 255, 0.02)";
+          // Thin #CFC8B8 inner grid mortar lines
+          ctx.strokeStyle = "#CFC8B8";
           ctx.lineWidth = 1;
           ctx.strokeRect(px + 0.5, py + 0.5, tileSize - 1, tileSize - 1);
+        }
+      }
+    }
+
+    // Pass 2: Subtle drop shadows cast from walls onto south floor tiles
+    for (let y = 0; y < map.height; y++) {
+      for (let x = 0; x < map.width; x++) {
+        if (map.grid[y][x] === TILE.WALL) {
+          const px = x * tileSize;
+          const py = y * tileSize;
+
+          // Drop shadow cast onto south tile if it is a floor tile
+          if (y + 1 < map.height && map.grid[y + 1][x] === TILE.FLOOR) {
+            const shadowH = 6;
+            const shadowGrad = ctx.createLinearGradient(0, py + tileSize, 0, py + tileSize + shadowH);
+            shadowGrad.addColorStop(0, "rgba(15, 23, 42, 0.28)");
+            shadowGrad.addColorStop(1, "rgba(15, 23, 42, 0)");
+            ctx.fillStyle = shadowGrad;
+            ctx.fillRect(px, py + tileSize, tileSize, shadowH);
+          }
+        }
+      }
+    }
+
+    // Pass 3: 2.5D raised dungeon stone blocks
+    for (let y = 0; y < map.height; y++) {
+      for (let x = 0; x < map.width; x++) {
+        if (map.grid[y][x] === TILE.WALL) {
+          const px = x * tileSize;
+          const py = y * tileSize;
+
+          // Top face (#475569)
+          ctx.fillStyle = "#475569";
+          ctx.fillRect(px, py, tileSize, tileSize - 10);
+
+          // Bottom 10px bevel face (#334155)
+          ctx.fillStyle = "#334155";
+          ctx.fillRect(px, py + tileSize - 10, tileSize, 10);
+
+          // Light top highlight (#64748B)
+          ctx.fillStyle = "#64748B";
+          ctx.fillRect(px, py, tileSize, 2);
+
+          // Subtle bevel seam between top and bevel faces
+          ctx.fillStyle = "rgba(15, 23, 42, 0.45)";
+          ctx.fillRect(px, py + tileSize - 10, tileSize, 1);
+
+          // Subtle side edge definition
+          ctx.fillStyle = "rgba(0, 0, 0, 0.12)";
+          ctx.fillRect(px, py, 1, tileSize);
+          ctx.fillRect(px + tileSize - 1, py, 1, tileSize);
         }
       }
     }
@@ -134,17 +177,18 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE, getSetti
   function drawHighlights(reachable) {
     if (!reachable || !(reachable instanceof Map)) return;
 
-    ctx.fillStyle = "rgba(88, 166, 255, 0.22)";
-    ctx.strokeStyle = "rgba(88, 166, 255, 0.5)";
-    ctx.lineWidth = 1.5;
+    // Glowing tactical tiles: rgba(37, 99, 235, 0.20) fill with a crisp 2px solid rgba(37, 99, 235, 0.65) inner border
+    ctx.fillStyle = "rgba(37, 99, 235, 0.20)";
+    ctx.strokeStyle = "rgba(37, 99, 235, 0.65)";
+    ctx.lineWidth = 2;
 
     for (const [coordKey] of reachable.entries()) {
       const [x, y] = coordKey.split(",").map(Number);
       const px = x * tileSize;
       const py = y * tileSize;
 
-      ctx.fillRect(px + 2, py + 2, tileSize - 4, tileSize - 4);
-      ctx.strokeRect(px + 2.5, py + 2.5, tileSize - 5, tileSize - 5);
+      ctx.fillRect(px + 1, py + 1, tileSize - 2, tileSize - 2);
+      ctx.strokeRect(px + 2, py + 2, tileSize - 4, tileSize - 4);
     }
   }
 
@@ -252,30 +296,38 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE, getSetti
     const ratio = Math.max(0, Math.min(1, currentHp / maxHp));
 
     const barW = 48;
-    const barH = 5;
+    const barH = 6;
     const barX = px + (tileSize - barW) / 2;
     const barY = py + 2;
 
-    // Background
-    ctx.fillStyle = "rgba(0, 0, 0, 0.75)";
+    // Solid dark outer backing for sharp legibility against light limestone floor
+    ctx.fillStyle = "#0F172A";
+    ctx.fillRect(barX - 1.5, barY - 1.5, barW + 3, barH + 3);
+
+    // Dark track background
+    ctx.fillStyle = "#334155";
     ctx.fillRect(barX, barY, barW, barH);
 
-    // Health Fill (green > 50%, amber > 25%, red otherwise)
-    let fillColor = "#f85149";
+    // Health Fill (vibrant green > 50%, amber > 25%, red otherwise)
+    let fillColor = "#EF4444";
     if (ratio > 0.5) {
-      fillColor = "#3fb950";
+      fillColor = "#22C55E";
     } else if (ratio > 0.25) {
-      fillColor = "#d29922";
+      fillColor = "#F59E0B";
     }
 
     const fillW = Math.round(barW * ratio);
     if (fillW > 0) {
       ctx.fillStyle = fillColor;
       ctx.fillRect(barX, barY, fillW, barH);
+
+      // Subtle top sheen line for tactile polish
+      ctx.fillStyle = "rgba(255, 255, 255, 0.35)";
+      ctx.fillRect(barX, barY, fillW, 1.5);
     }
 
-    // Border
-    ctx.strokeStyle = "rgba(0, 0, 0, 0.6)";
+    // Crisp dark outline
+    ctx.strokeStyle = "#0F172A";
     ctx.lineWidth = 1;
     ctx.strokeRect(barX - 0.5, barY - 0.5, barW + 1, barH + 1);
   }
@@ -421,7 +473,7 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE, getSetti
 
   function drawGridLines(map) {
     if (!map) return;
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.04)";
+    ctx.strokeStyle = "rgba(197, 160, 89, 0.12)";
     ctx.lineWidth = 1;
     ctx.beginPath();
     for (let x = 0; x <= map.width; x++) {
@@ -439,7 +491,7 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE, getSetti
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     if (!view || !view.state || !view.state.map) {
-      ctx.fillStyle = "#0d1117";
+      ctx.fillStyle = "#FAF8F5";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       return;
     }
