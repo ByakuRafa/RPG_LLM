@@ -214,7 +214,9 @@ export async function boot() {
       chat.appendMessage({
         role: 'player',
         author,
-        text: `"${text}"${tagPart}`
+        text: `"${text}"${tagPart}`,
+        classId: active?.classId,
+        hero: active
       });
 
       // Pipeline execution through Game Master

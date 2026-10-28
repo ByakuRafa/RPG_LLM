@@ -1,9 +1,11 @@
 /**
- * Chat component (Sprint 3, Task 3.7).
- * Real submit flow, thinking spinner with cancel button, GM parchment & system bubbles,
- * active tag badge [Tag Ativa: ...], Esc/clear handling, and safe textContent-only rendering.
- * Pure DOM layer, zero direct state mutation.
+ * Chat component (Sprint 3, Task 3.7 & UI Sprint 3).
+ * Adventure Chronicle & Compact Rules Log overhaul:
+ * Storybook/grimoire GM cards, active hero class player cards,
+ * floating "Prepared Action" spell pill, and clean game command bar.
+ * Pure DOM layer, zero direct state mutation, strict textContent sanitization.
  */
+import { CLASSES, HERO_ROSTER } from '../engine/catalog.js';
 
 export function mountChat(rootEl, bus) {
   let currentTag = null;
@@ -13,11 +15,15 @@ export function mountChat(rootEl, bus) {
   let isBenchmarking = false;
   let timerInterval = null;
   let secondsThinking = 0;
+  let currentActiveHero = null;
 
   rootEl.innerHTML = `
     <div class="chat-wrapper">
       <div class="chat-header">
-        <span class="chat-title">Crônica da Masmorra</span>
+        <div class="chat-title-group">
+          <span class="chat-title-icon">📖</span>
+          <span class="chat-title">Crônica da Masmorra</span>
+        </div>
         <span class="chat-status-indicator" id="chat-status-indicator">Pronto</span>
       </div>
 
@@ -32,13 +38,14 @@ export function mountChat(rootEl, bus) {
         <button type="button" id="chat-cancel" class="btn-chat-cancel" title="Cancelar requisição">Cancelar</button>
       </div>
 
-      <!-- Active Tag Badge -->
+      <!-- Active Tag Badge: Floating Prepared Action Spell Pill -->
       <div id="chat-tag-badge" class="chat-tag-badge" style="display: none;">
+        <span class="spell-pill-icon">✨</span>
         <span id="chat-tag-text" class="tag-badge-text"></span>
-        <button type="button" id="chat-tag-clear" class="tag-badge-close" title="Remover tag ativa (Esc)">✕</button>
+        <button type="button" id="chat-tag-clear" class="tag-badge-close" title="Cancelar Ação Preparada (Esc)">✕</button>
       </div>
 
-      <!-- Input Form -->
+      <!-- Input Form: Clean Game Command Bar -->
       <form id="chat-form" class="chat-form">
         <textarea
           id="chat-input"
@@ -46,7 +53,9 @@ export function mountChat(rootEl, bus) {
           placeholder="Comande sua ação em linguagem natural... (Shift+Enter para nova linha)"
           rows="2"
         ></textarea>
-        <button type="submit" id="chat-send" class="chat-send-btn">Enviar</button>
+        <button type="submit" id="chat-send" class="chat-send-btn">
+          <span>Enviar</span>
+        </button>
       </form>
     </div>
   `;
@@ -117,9 +126,9 @@ export function mountChat(rootEl, bus) {
   function setTag(tag) {
     if (tag && (tag.id || typeof tag === 'string')) {
       currentTag = tag;
-      const tagLabel = tag.id || tag;
+      const tagLabel = tag.label || tag.id || tag;
       tagBadgeEl.style.display = 'inline-flex';
-      tagTextEl.textContent = `[Tag Ativa: ${tagLabel}]`;
+      tagTextEl.textContent = `Ação Preparada: ${tagLabel}`;
     } else {
       currentTag = null;
       tagBadgeEl.style.display = 'none';
@@ -127,9 +136,9 @@ export function mountChat(rootEl, bus) {
     }
   }
 
-  function appendMessage({ role = 'player', author, text, level = 'info' }) {
+  function appendMessage({ role = 'player', author, text, level = 'info', classId = null, hero = null }) {
     const msgEl = document.createElement('div');
-    msgEl.className = `chat-entry chat-role-${role}`;
+    msgEl.className = `chat-entry msg-${role} chat-role-${role}`;
     if (role === 'system' && level === 'error') {
       msgEl.classList.add('system-error');
     }
@@ -138,8 +147,29 @@ export function mountChat(rootEl, bus) {
     metaEl.className = 'chat-entry-meta';
 
     const badgeEl = document.createElement('span');
-    badgeEl.className = `chat-role-badge badge-${role}`;
-    badgeEl.textContent = author || (role === 'player' ? 'Herói' : role === 'gm' ? 'Mestre de Jogo' : 'Motor de Regras');
+
+    if (role === 'gm') {
+      badgeEl.className = 'chat-role-badge badge-gm';
+      badgeEl.textContent = author || 'Mestre da Masmorra';
+    } else if (role === 'player') {
+      const resolvedClassId = classId || hero?.classId || currentActiveHero?.classId ||
+        HERO_ROSTER?.find(h => h.name === author)?.classId || 'warrior';
+      const cls = (CLASSES && CLASSES[resolvedClassId]) || { label: 'Herói', color: '#2563EB' };
+      const heroColor = cls.color || '#2563EB';
+
+      msgEl.classList.add(`hero-class-${resolvedClassId}`);
+      msgEl.style.setProperty('--hero-color', heroColor);
+      msgEl.style.borderLeftColor = heroColor;
+
+      badgeEl.className = 'chat-role-badge badge-player';
+      badgeEl.style.borderColor = heroColor;
+      badgeEl.style.color = heroColor;
+      badgeEl.style.backgroundColor = heroColor + '18';
+      badgeEl.textContent = author || cls.label || 'Herói';
+    } else {
+      badgeEl.className = `chat-role-badge badge-${role}`;
+      badgeEl.textContent = author || (level === 'error' ? 'Ação Rejeitada' : 'Motor de Regras');
+    }
 
     const timeEl = document.createElement('span');
     timeEl.className = 'chat-time';
@@ -200,7 +230,7 @@ export function mountChat(rootEl, bus) {
   bus?.on('chat:gm', ({ narrative }) => {
     appendMessage({
       role: 'gm',
-      author: 'Mestre de Jogo',
+      author: 'Mestre da Masmorra',
       text: narrative
     });
   });
@@ -222,8 +252,16 @@ export function mountChat(rootEl, bus) {
     setTag(tag);
   });
 
-  bus?.on('turn:changed', ({ phase }) => {
+  bus?.on('turn:changed', ({ phase, activeId, state }) => {
     isPhaseLocked = phase === 'ENEMY';
+    if (state && activeId && state.entities) {
+      currentActiveHero = state.entities[activeId];
+    } else if (activeId) {
+      const roster = HERO_ROSTER?.find(h => h.id === activeId);
+      if (roster) {
+        currentActiveHero = roster;
+      }
+    }
     updateLockState();
   });
 
