@@ -381,7 +381,9 @@ export function validateInteract(s, { character_id, object_id }, ctx = {}) {
   }
 
   // 4. NOT_ADJACENT
-  if (!isAdjacent(actor.position, obj.position)) {
+  const isDirectlyOnDoor = (obj.type === 'door' || obj.id === 'exit_door') &&
+    actor.position.x === obj.position.x && actor.position.y === obj.position.y;
+  if (!isAdjacent(actor.position, obj.position) && !isDirectlyOnDoor) {
     return { ok: false, code: 'NOT_ADJACENT', message: REJECT.NOT_ADJACENT() };
   }
 

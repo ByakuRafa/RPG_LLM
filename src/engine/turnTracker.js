@@ -3,7 +3,9 @@
  * Zero DOM, Zero Canvas, 100% pure JS logic.
  */
 import { PHASE, ENEMY_PHASE_ID, TURN_ORDER } from '../core/config.js';
-import { cloneState, getAliveHeroes, getAliveEnemies } from './gameState.js';
+import { cloneState, getAliveHeroes, getAliveEnemies, evaluateGameOver } from './gameState.js';
+
+export { evaluateGameOver };
 
 /**
  * Pure function: sets up hero turn state and emits turn event.
@@ -102,23 +104,6 @@ export function advanceTurn(s) {
 }
 
 /**
- * Evaluates game over condition.
- * @param {object} s GameState
- * @returns {'won' | 'lost' | null}
- */
-export function evaluateGameOver(s) {
-  if (!s) return null;
-  if (s.status === 'won' || s.status === 'lost') return s.status;
-
-  const aliveHeroes = getAliveHeroes(s);
-  const aliveEnemies = getAliveEnemies(s);
-
-  if (aliveEnemies.length === 0) return 'won';
-  if (aliveHeroes.length === 0) return 'lost';
-  return null;
-}
-
-/**
  * Impure Turn Controller.
  * Wires store, bus, and queue to handle turn progression.
  * @param {{ store: object, bus: object, queue?: object, enemyController?: object|null }} options
@@ -139,6 +124,24 @@ export function createTurnController({ store, bus, queue, enemyController = null
   }
 
   async function runEnemyPhase() {
+    const aliveEnemies = getAliveEnemies(store.getState());
+    if (aliveEnemies.length === 0) {
+      const outcome = evaluateGameOver(store.getState());
+      if (!outcome) {
+        const { state: nextState, events } = advanceTurn(store.getState());
+        store.commit(nextState, events);
+        bus?.emit('turn:changed', { activeId: nextState.activeId, round: nextState.round, phase: nextState.phase });
+        const heroName = nextState.entities[nextState.activeId]?.name || 'Thorin';
+        bus?.emit('log:entry', {
+          level: 'TURN',
+          text: `[TURN] Vez de ${heroName} (Rodada ${nextState.round}).`,
+          source: 'SYSTEM',
+          ts: Date.now()
+        });
+      }
+      return;
+    }
+
     bus?.emit('log:entry', {
       level: 'TURN',
       text: '[TURN] Fase Inimiga',

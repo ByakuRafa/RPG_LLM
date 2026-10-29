@@ -342,6 +342,46 @@ export async function boot() {
     turns.start();
   });
 
+  // Tactical Board Click: move active hero to clicked reachable tile or interact with adjacent object
+  bus.on('board:tileClicked', ({ x, y }) => {
+    if (gmPanel && typeof gmPanel.isOpen === 'function' && gmPanel.isOpen()) return;
+    const s = store.getState();
+    if (s.phase !== PHASE.HERO || !s.activeId) return;
+    const hero = s.entities?.[s.activeId];
+    if (!hero || !hero.alive) return;
+
+    // Check if clicked tile is reachable with hero's remaining MP
+    if (hero.mp > 0) {
+      const reachable = computeReachable(s, s.activeId, hero.mp);
+      if (reachable.has(`${x},${y}`)) {
+        bus.emit('intent:enqueue', {
+          source: 'UI_CLICK',
+          tool_calls: [{
+            name: 'move_character',
+            arguments: { character_id: hero.id, target_x: x, target_y: y }
+          }]
+        });
+        return;
+      }
+    }
+
+    // Check if clicked tile has an adjacent interactive object (e.g. door or chest)
+    const obj = Object.values(s.objects || {}).find(o => o.position.x === x && o.position.y === y);
+    if (obj) {
+      const dist = Math.abs(hero.position.x - x) + Math.abs(hero.position.y - y);
+      const isDirectlyOnDoor = (obj.type === 'door' || obj.id === 'exit_door') && dist === 0;
+      if (dist === 1 || isDirectlyOnDoor) {
+        bus.emit('intent:enqueue', {
+          source: 'UI_CLICK',
+          tool_calls: [{
+            name: 'interact_object',
+            arguments: { character_id: hero.id, object_id: obj.id }
+          }]
+        });
+      }
+    }
+  });
+
   // 15. Wire State Changes to Renderer View Model & Game Over
   bus.on('state:changed', ({ state }) => {
     renderer.setView(buildViewModel(state));
