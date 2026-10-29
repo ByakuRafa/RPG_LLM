@@ -1140,3 +1140,239 @@ describe('IA Inimiga Determinística (Task 3.4 & Task 3.10)', () => {
     assert(finalState.entities.goblin_2.position.x < 5);
   });
 });
+
+describe('Fase 4: Testes de Unidade Abrangentes (Regras, Habilidades AoE, Poções e Empurrão)', () => {
+  // 1. Using health_potion on self and on an adjacent ally, plus alias resolution (pocao_de_cura -> health_potion)
+  it('Uso de health_potion em si mesmo e em aliado adjacente, com resolução de alias "pocao_de_cura"', () => {
+    const s = makeTestState([
+      '.......',
+      '..WM...',
+      '.......'
+    ]);
+    s.activeId = 'hero_warrior';
+    s.entities.hero_warrior.hp = 15; // max 30
+    s.entities.hero_warrior.ap = 1;
+    s.entities.hero_mage.hp = 8;    // max 18
+    s.inventory = [{ id: 'health_potion', qty: 2 }];
+
+    // 1a. Alias resolution & auto-target self
+    const rawBatchSelf = {
+      tool_calls: [{ name: 'use_item', arguments: { character_id: 'hero_warrior', item_id: 'pocao_de_cura' } }]
+    };
+    const normSelf = normalizeBatch(rawBatchSelf, s);
+    assertEqual(normSelf.tool_calls[0].arguments.item_id, 'health_potion');
+    assertEqual(normSelf.tool_calls[0].arguments.target_id, 'hero_warrior');
+
+    const valSelf = validateUseItem(s, normSelf.tool_calls[0].arguments);
+    assertEqual(valSelf.ok, true);
+
+    const resSelf = applyUseItem(s, normSelf.tool_calls[0].arguments);
+    assertEqual(resSelf.state.entities.hero_warrior.hp, 25); // +10
+    assertEqual(resSelf.state.inventory[0].qty, 1);
+
+    // 1b. Use on adjacent ally (Lyra)
+    resSelf.state.entities.hero_warrior.ap = 1; // restore AP for second action
+    const rawBatchAlly = {
+      tool_calls: [{ name: 'use_item', arguments: { character_id: 'hero_warrior', item_id: 'health_potion', target_id: 'hero_mage' } }]
+    };
+    const normAlly = normalizeBatch(rawBatchAlly, resSelf.state);
+    const valAlly = validateUseItem(resSelf.state, normAlly.tool_calls[0].arguments);
+    assertEqual(valAlly.ok, true);
+
+    const resAlly = applyUseItem(resSelf.state, normAlly.tool_calls[0].arguments);
+    assertEqual(resAlly.state.entities.hero_mage.hp, 18); // +10 (capped at max 18)
+    assertEqual(resAlly.state.inventory.length, 0); // consumed
+  });
+
+  // 2. Casting heal_pulse on self (omitted target_id or "self"/"mim") and on an ally by character name ("Thorin" -> hero_warrior)
+  it('Conjuração de heal_pulse em si mesmo e em aliado por nome de personagem ("Thorin")', () => {
+    const s = makeTestState([
+      '.......',
+      '..WM...',
+      '.......'
+    ]);
+    s.activeId = 'hero_mage';
+    s.entities.hero_mage.hp = 10;
+    s.entities.hero_mage.ap = 1;
+    s.entities.hero_warrior.hp = 20;
+
+    // 2a. heal_pulse com "mim" ou omitido
+    const rawSelf = {
+      tool_calls: [{ name: 'use_ability', arguments: { caster_id: 'hero_mage', ability_id: 'heal_pulse', target_id: 'mim' } }]
+    };
+    const normSelf = normalizeBatch(rawSelf, s);
+    assertEqual(normSelf.tool_calls[0].arguments.target_id, 'hero_mage');
+
+    const valSelf = validateUseAbility(s, normSelf.tool_calls[0].arguments);
+    assertEqual(valSelf.ok, true);
+
+    const resSelf = applyAbility(s, normSelf.tool_calls[0].arguments, valSelf.resolved);
+    assertEqual(resSelf.state.entities.hero_mage.hp, 18); // +8
+
+    // 2b. heal_pulse em aliado por nome "Thorin"
+    const rawAlly = {
+      tool_calls: [{ name: 'use_ability', arguments: { caster_id: 'hero_mage', ability_id: 'heal_pulse', target_id: 'Thorin' } }]
+    };
+    const normAlly = normalizeBatch(rawAlly, s);
+    assertEqual(normAlly.tool_calls[0].arguments.target_id, 'hero_warrior');
+
+    const valAlly = validateUseAbility(s, normAlly.tool_calls[0].arguments);
+    assertEqual(valAlly.ok, true);
+
+    const resAlly = applyAbility(s, normAlly.tool_calls[0].arguments, valAlly.resolved);
+    assertEqual(resAlly.state.entities.hero_warrior.hp, 28); // +8
+  });
+
+  // 3. Executing shield_bash via tool/ability aliases ("push", "empurrar") and verifying deterministic 1-tile displacement and wall collision (push_blocked)
+  it('Execução de shield_bash com aliases ("push", "empurrar"), deslocamento determinístico de 1 casa e colisão com parede', () => {
+    // 3a. Empurrão com sucesso em corredor livre
+    const s1 = makeTestState([
+      '.......',
+      '..WG...',
+      '.......'
+    ]);
+    s1.activeId = 'hero_warrior';
+    s1.entities.hero_warrior.ap = 1;
+    s1.entities.goblin_1.hp = 12;
+
+    const rawPush = {
+      tool_calls: [{ name: 'empurrar', arguments: { character_id: 'hero_warrior', target_id: 'goblin_1' } }]
+    };
+    const normPush = normalizeBatch(rawPush, s1);
+    assertEqual(normPush.tool_calls[0].name, 'use_ability');
+    assertEqual(normPush.tool_calls[0].arguments.ability_id, 'shield_bash');
+    assertEqual(normPush.tool_calls[0].arguments.target_id, 'goblin_1');
+
+    const valPush = validateUseAbility(s1, normPush.tool_calls[0].arguments);
+    assertEqual(valPush.ok, true);
+    assertEqual(valPush.resolved.pushTo.x, 4); // W em (2,1), G em (3,1) -> empurrado para (4,1)
+
+    const resPush = applyAbility(s1, normPush.tool_calls[0].arguments, valPush.resolved);
+    assertEqual(resPush.state.entities.goblin_1.position.x, 4);
+    assertEqual(resPush.state.entities.goblin_1.hp, 8); // 12 - 4
+
+    const pushEv = resPush.events.find(e => e.type === 'push');
+    assert(Boolean(pushEv), 'Deve emitir evento de push');
+    assertEqual(pushEv.to.x, 4);
+
+    // 3b. Colisão com parede bloqueia empurrão (push_blocked)
+    const s2 = makeTestState([
+      '#######',
+      '#..WG##',
+      '#######'
+    ]);
+    s2.activeId = 'hero_warrior';
+    s2.entities.hero_warrior.ap = 1;
+
+    const valBlocked = validateUseAbility(s2, {
+      caster_id: 'hero_warrior',
+      ability_id: 'shield_bash',
+      target_id: 'goblin_1'
+    });
+    assertEqual(valBlocked.ok, true);
+    assertEqual(valBlocked.resolved.pushTo, null);
+    assertEqual(valBlocked.resolved.pushBlockedReason, 'wall');
+
+    const resBlocked = applyAbility(s2, {
+      caster_id: 'hero_warrior',
+      ability_id: 'shield_bash',
+      target_id: 'goblin_1'
+    }, valBlocked.resolved);
+
+    // Goblin não mudou de posição
+    assertEqual(resBlocked.state.entities.goblin_1.position.x, 4);
+    const blockedEv = resBlocked.events.find(e => e.type === 'push_blocked');
+    assert(Boolean(blockedEv), 'Deve emitir evento push_blocked');
+    assertEqual(blockedEv.reason, 'wall');
+  });
+
+  // 4. Executing whirlwind hitting 2 adjacent goblins simultaneously and pushing both
+  it('Execução de whirlwind atingindo 2 goblins adjacentes simultaneamente e empurrando ambos', () => {
+    const s = makeTestState([
+      '.........',
+      '...GWG...',
+      '.........'
+    ]);
+    s.activeId = 'hero_warrior';
+    s.entities.hero_warrior.ap = 1;
+    s.entities.goblin_1.hp = 12;
+    s.entities.goblin_2.hp = 12;
+
+    const rawBatch = {
+      tool_calls: [{ name: 'use_ability', arguments: { caster_id: 'hero_warrior', ability_id: 'whirlwind' } }]
+    };
+    const norm = normalizeBatch(rawBatch, s);
+    assertEqual(norm.tool_calls[0].arguments.target_id, 'hero_warrior');
+
+    const val = validateUseAbility(s, norm.tool_calls[0].arguments);
+    assertEqual(val.ok, true);
+    assert(val.resolved.isAoE, 'isAoE deve ser true');
+    assertEqual(val.resolved.targets.length, 2);
+
+    const res = applyAbility(s, norm.tool_calls[0].arguments, val.resolved);
+    assertEqual(res.state.entities.hero_warrior.ap, 0);
+
+    // Ambos os goblins sofreram 5 de dano
+    assertEqual(res.state.entities.goblin_1.hp, 7);
+    assertEqual(res.state.entities.goblin_2.hp, 7);
+
+    // Ambos foram empurrados para direções opostas
+    assertEqual(res.state.entities.goblin_1.position.x, 2); // de (3,1) para (2,1)
+    assertEqual(res.state.entities.goblin_2.position.x, 6); // de (5,1) para (6,1)
+
+    const blastEv = res.events.find(e => e.type === 'aoe_blast');
+    assert(Boolean(blastEv), 'Deve emitir evento aoe_blast');
+    assertEqual(blastEv.abilityId, 'whirlwind');
+  });
+
+  // 5. Executing fireball targeting a ground coordinate (target_x, target_y) hitting multiple enemies in radius 1, and rejecting with NO_TARGETS_IN_AOE when cast on an empty area
+  it('Execução de fireball visando coordenadas de solo atingindo múltiplos inimigos no raio 1 e rejeição por NO_TARGETS_IN_AOE em solo vazio', () => {
+    const s = makeTestState([
+      '..........',
+      '..M..GG...',
+      '..........'
+    ]);
+    s.activeId = 'hero_mage';
+    s.entities.hero_mage.ap = 1;
+    s.entities.goblin_1.hp = 12;
+    s.entities.goblin_2.hp = 12;
+
+    // 5a. Fireball em solo vazio (0, 0) longe dos goblins
+    const valEmpty = validateUseAbility(s, {
+      caster_id: 'hero_mage',
+      ability_id: 'fireball',
+      target_x: 0,
+      target_y: 0
+    });
+    assertEqual(valEmpty.ok, false);
+    assertEqual(valEmpty.code, 'NO_TARGETS_IN_AOE');
+
+    // 5b. Fireball no centro (5, 1) atingindo ambos os goblins em (5,1) e (6,1)
+    const valHit = validateUseAbility(s, {
+      caster_id: 'hero_mage',
+      ability_id: 'fireball',
+      target_x: 5,
+      target_y: 1
+    });
+    assertEqual(valHit.ok, true);
+    assert(valHit.resolved.isAoE, 'isAoE deve ser true');
+    assertEqual(valHit.resolved.targets.length, 2);
+
+    const resHit = applyAbility(s, {
+      caster_id: 'hero_mage',
+      ability_id: 'fireball',
+      target_x: 5,
+      target_y: 1
+    }, valHit.resolved);
+
+    assertEqual(resHit.state.entities.hero_mage.ap, 0);
+    // Dano 8 em cada goblin (12 - 8 = 4)
+    assertEqual(resHit.state.entities.goblin_1.hp, 4);
+    assertEqual(resHit.state.entities.goblin_2.hp, 4);
+
+    const blastEv = resHit.events.find(e => e.type === 'aoe_blast');
+    assert(Boolean(blastEv), 'Deve emitir evento aoe_blast');
+    assertEqual(blastEv.center.x, 5);
+    assertEqual(blastEv.center.y, 1);
+  });
+});

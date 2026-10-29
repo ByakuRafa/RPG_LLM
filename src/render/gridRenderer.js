@@ -237,6 +237,58 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE, getSetti
     }
   }
 
+  function drawAoEPreview(preview, now) {
+    if (!preview || !Array.isArray(preview.tiles) || preview.tiles.length === 0) return;
+
+    ctx.save();
+
+    let fillColor, strokeColor;
+    if (!preview.inRange) {
+      fillColor = "rgba(107, 114, 128, 0.25)";
+      strokeColor = "rgba(156, 163, 175, 0.75)";
+      ctx.setLineDash([4, 4]);
+    } else if (preview.targetFilter === "ally") {
+      fillColor = "rgba(16, 185, 129, 0.25)";
+      strokeColor = "rgba(16, 185, 129, 0.85)";
+    } else {
+      fillColor = "rgba(239, 68, 68, 0.28)";
+      strokeColor = "rgba(239, 68, 68, 0.85)";
+    }
+
+    ctx.fillStyle = fillColor;
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = 2;
+
+    for (const t of preview.tiles) {
+      const px = t.x * tileSize;
+      const py = t.y * tileSize;
+      ctx.fillRect(px + 1, py + 1, tileSize - 2, tileSize - 2);
+      ctx.strokeRect(px + 2, py + 2, tileSize - 4, tileSize - 4);
+    }
+
+    // Reticle / target center indicator
+    if (preview.center) {
+      const cx = preview.center.x * tileSize + tileSize / 2;
+      const cy = preview.center.y * tileSize + tileSize / 2;
+      ctx.setLineDash([]);
+      ctx.strokeStyle = strokeColor;
+      ctx.lineWidth = 2;
+
+      ctx.beginPath();
+      ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(cx - 10, cy);
+      ctx.lineTo(cx + 10, cy);
+      ctx.moveTo(cx, cy - 10);
+      ctx.lineTo(cx, cy + 10);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
   function drawObjects(objects) {
     if (!objects) return;
 
@@ -576,6 +628,14 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE, getSetti
         const alpha = (1 - progress) * (eff.maxAlpha || 0.6);
         ctx.fillStyle = `rgba(${eff.rgb}, ${alpha})`;
         ctx.fillRect(eff.x, eff.y, eff.w, eff.h);
+      } else if (eff.type === "ring") {
+        const radius = eff.startRadius + (eff.maxRadius - eff.startRadius) * progress;
+        const alpha = (1 - progress) * (eff.maxAlpha || 0.8);
+        ctx.strokeStyle = `rgba(${eff.rgb}, ${alpha})`;
+        ctx.lineWidth = 3 * (1 - progress) + 1;
+        ctx.beginPath();
+        ctx.arc(eff.cx, eff.cy, radius, 0, Math.PI * 2);
+        ctx.stroke();
       } else if (eff.type === "floatText") {
         const currentY = eff.startY - (eff.dy || 20) * progress;
         const alpha = 1 - progress * 0.4;
@@ -620,6 +680,7 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE, getSetti
     const state = view.state;
     drawTiles(state.map);
     drawHighlights(view.reachable);
+    drawAoEPreview(view.aoePreview, now);
     drawObjects(state.objects);
     drawTokens(state.entities);
     drawActiveRing(state.entities, view.activeId, now);
@@ -805,6 +866,44 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE, getSetti
           duration: 200
         });
       }
+    } else if (ev.type === "aoe_blast") {
+      const isHeal = ev.abilityId === "divine_prayer";
+      const rgb = isHeal ? "16, 185, 129" : "245, 158, 11";
+      const now = performance.now();
+      const duration = 200;
+
+      // Expand ring from center
+      if (ev.center) {
+        const cx = ev.center.x * tileSize + tileSize / 2;
+        const cy = ev.center.y * tileSize + tileSize / 2;
+        activeEffects.push({
+          type: "ring",
+          cx,
+          cy,
+          startRadius: tileSize * 0.25,
+          maxRadius: tileSize * 1.8,
+          rgb,
+          maxAlpha: 0.8,
+          startTime: now,
+          duration
+        });
+      }
+
+      // Flash all affected tiles
+      for (const t of (ev.tiles || [])) {
+        activeEffects.push({
+          type: "flash",
+          x: t.x * tileSize,
+          y: t.y * tileSize,
+          w: tileSize,
+          h: tileSize,
+          rgb,
+          maxAlpha: 0.45,
+          startTime: now,
+          duration
+        });
+      }
+      await new Promise(resolve => setTimeout(resolve, duration));
     }
   }
 
@@ -836,6 +935,29 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE, getSetti
     if (x >= 0 && x < mapW && y >= 0 && y < mapH) {
       bus?.emit("board:tileClicked", { x, y });
     }
+  });
+
+  canvas.addEventListener("mousemove", (ev) => {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const canvasX = (ev.clientX - rect.left) * scaleX;
+    const canvasY = (ev.clientY - rect.top) * scaleY;
+    const x = Math.floor(canvasX / tileSize);
+    const y = Math.floor(canvasY / tileSize);
+
+    const mapW = view?.state?.map?.width || CONFIG.GRID_W || 12;
+    const mapH = view?.state?.map?.height || CONFIG.GRID_H || 12;
+
+    if (x >= 0 && x < mapW && y >= 0 && y < mapH) {
+      bus?.emit("board:tileHovered", { x, y });
+    } else {
+      bus?.emit("board:tileHovered", null);
+    }
+  });
+
+  canvas.addEventListener("mouseleave", () => {
+    bus?.emit("board:tileHovered", null);
   });
 
   /* ------------------------------- Render Loop ------------------------------- */

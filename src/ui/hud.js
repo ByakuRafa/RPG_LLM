@@ -62,6 +62,33 @@ export const ACTION_ICONS = {
     <path d="M10.8 12.2L20 3l2 2-1.5 1.5L19 5l-2 2 1.5 1.5-1 1-1.5-1.5-2.2 2.2"/>
   </svg>`,
 
+  // whirlwind = spinning vortex / spiral blades
+  whirlwind: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hotbar-svg icon-whirlwind">
+    <path d="M12 2a10 10 0 0 1 10 10c0 4-2.5 7.5-6 9" stroke-dasharray="3 2"/>
+    <path d="M12 22A10 10 0 0 1 2 12c0-4 2.5-7.5 6-9" stroke-dasharray="3 2"/>
+    <path d="M12 6a6 6 0 0 1 6 6c0 2.5-1.5 4.5-3.5 5.5"/>
+    <path d="M12 18a6 6 0 0 1-6-6c0-2.5 1.5-4.5 3.5-5.5"/>
+    <circle cx="12" cy="12" r="2" fill="currentColor"/>
+  </svg>`,
+
+  // fireball = exploding fireball / meteor
+  fireball: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hotbar-svg icon-fireball">
+    <circle cx="12" cy="12" r="5" fill="currentColor" fill-opacity="0.25"/>
+    <circle cx="12" cy="12" r="5"/>
+    <path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>
+    <path d="M4.9 4.9l2.2 2.2M16.9 16.9l2.2 2.2M4.9 19.1l2.2-2.2M16.9 7.1l2.2-2.2"/>
+    <circle cx="12" cy="12" r="2" fill="currentColor"/>
+  </svg>`,
+
+  // divine_prayer = radiant holy star / halo
+  divine_prayer: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hotbar-svg icon-prayer">
+    <circle cx="12" cy="12" r="8" stroke-dasharray="2 2" stroke-opacity="0.6"/>
+    <path d="M12 3v18M3 12h18" stroke-width="2.2"/>
+    <path d="M5.6 5.6l12.8 12.8M5.6 18.4L18.4 5.6" stroke-width="1.5"/>
+    <circle cx="12" cy="12" r="3" fill="currentColor" fill-opacity="0.3"/>
+    <circle cx="12" cy="12" r="1.5" fill="currentColor"/>
+  </svg>`,
+
   // health_potion = flask
   health_potion: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hotbar-svg icon-potion">
     <path d="M10 2h4"/>
@@ -99,10 +126,11 @@ function getActionSvg(id) {
 function getAbilityTooltip(ab) {
   if (!ab) return '';
   let eff = '';
+  const aoeTxt = ab.aoe ? ` [Área: ${ab.aoe.shape}, raio ${ab.aoe.radius}]` : '';
   if (ab.effect?.type === 'damage') {
-    eff = `${ab.effect.amount} de dano${ab.effect.push ? `, empurra ${ab.effect.push}` : ''}`;
+    eff = `${ab.effect.amount} de dano${ab.effect.push ? `, empurra ${ab.effect.push}` : ''}${aoeTxt}`;
   } else if (ab.effect?.type === 'heal') {
-    eff = `${ab.effect.amount} de cura`;
+    eff = `${ab.effect.amount} de cura${aoeTxt}`;
   } else if (ab.effect?.type === 'unlock') {
     eff = 'destranca baús';
   } else {

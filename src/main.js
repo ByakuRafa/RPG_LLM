@@ -13,7 +13,7 @@ import { TOOLS } from './engine/tools.js';
 import { createActionQueue } from './engine/actionQueue.js';
 import { createTurnController } from './engine/turnTracker.js';
 import { HeuristicEnemyStrategy, createEnemyController } from './engine/enemyController.js';
-import { computeReachable, inBounds } from './engine/pathfinding.js';
+import { computeReachable, inBounds, computeAoETiles, manhattan } from './engine/pathfinding.js';
 import { CLASSES, ABILITIES, ITEMS, HERO_ROSTER } from './engine/catalog.js';
 
 import { createLlmClient } from './llm/llmClient.js';
@@ -32,25 +32,58 @@ import { mountSettingsModal } from './ui/settingsModal.js';
 /**
  * Builds the view model for renderer consumption.
  * reachable is only computed in HERO phase for the active hero with mp > 0.
+ * aoePreview is computed when an ability tag with an AoE definition is active.
  *
  * @param {object} state GameState
- * @returns {{ state: object, activeId: string|null, reachable: Map<string, number>|null }}
+ * @param {object|null} [selectedTag=null]
+ * @param {{x: number, y: number}|null} [hoverTile=null]
+ * @returns {{ state: object, activeId: string|null, reachable: Map<string, number>|null, aoePreview: object|null }}
  */
-export function buildViewModel(state) {
-  if (!state) return { state: null, activeId: null, reachable: null };
+export function buildViewModel(state, selectedTag = null, hoverTile = null) {
+  if (!state) return { state: null, activeId: null, reachable: null, aoePreview: null };
 
   const activeId = state.activeId;
   const activeHero = state.entities?.[activeId];
   let reachable = null;
+  let aoePreview = null;
 
   if (state.phase === PHASE.HERO && activeHero && activeHero.alive && activeHero.mp > 0) {
     reachable = computeReachable(state, activeId, activeHero.mp);
   }
 
+  if (state.phase === PHASE.HERO && activeHero && activeHero.alive && selectedTag?.kind === 'ability') {
+    const ability = ABILITIES[selectedTag.id];
+    if (ability && ability.aoe) {
+      if (ability.target === 'self') {
+        const center = { x: activeHero.position.x, y: activeHero.position.y };
+        const tiles = computeAoETiles(state.map, center, ability.aoe, activeHero.position);
+        aoePreview = {
+          center,
+          tiles,
+          inRange: true,
+          targetFilter: ability.aoe.targetFilter || 'enemy'
+        };
+      } else if (hoverTile) {
+        const center = { x: hoverTile.x, y: hoverTile.y };
+        const dist = manhattan(activeHero.position.x, activeHero.position.y, center.x, center.y);
+        const range = ability.range ?? 1;
+        const inRange = dist <= range;
+        const tiles = computeAoETiles(state.map, center, ability.aoe, activeHero.position);
+        aoePreview = {
+          center,
+          tiles,
+          inRange,
+          targetFilter: ability.aoe.targetFilter || 'enemy'
+        };
+      }
+    }
+  }
+
   return {
     state,
     activeId,
-    reachable
+    reachable,
+    aoePreview
   };
 }
 
@@ -331,10 +364,16 @@ export async function boot() {
 
   // 14. Wire Intent Events & Tag Tracking
   let currentSelectedTag = null;
+  let currentHoverTile = null;
   let isQueueBusy = false;
   let isLlmBusy = false;
 
   const isBusy = () => isQueueBusy || isLlmBusy || (queue && typeof queue.isBusy === 'function' && queue.isBusy());
+
+  function updateViewModel() {
+    const s = store.getState();
+    renderer.setView(buildViewModel(s, currentSelectedTag, currentHoverTile));
+  }
 
   bus.on('queue:busy', (busy) => {
     isQueueBusy = !!busy;
@@ -346,12 +385,22 @@ export async function boot() {
 
   bus.on('ui:tagSelected', (tag) => {
     currentSelectedTag = tag;
+    updateViewModel();
+  });
+
+  bus.on('board:tileHovered', (tile) => {
+    currentHoverTile = tile;
+    if (currentSelectedTag && currentSelectedTag.kind === 'ability') {
+      updateViewModel();
+    }
   });
 
   bus.on('turn:changed', ({ phase }) => {
     if (phase === PHASE.ENEMY) {
       currentSelectedTag = null;
+      currentHoverTile = null;
     }
+    updateViewModel();
   });
 
   bus.on('intent:enqueue', (batch) => {
@@ -361,10 +410,12 @@ export async function boot() {
   bus.on('intent:reset', ({ seed: newSeed } = {}) => {
     queue.clear();
     currentSelectedTag = null;
+    currentHoverTile = null;
     if (overlayEl && overlayEl.open) overlayEl.close();
     const effectiveSeed = newSeed || seed;
     store.reset(createInitialState(effectiveSeed));
     turns.start();
+    updateViewModel();
   });
 
   // Tactical Board Click: execute active tag on clicked tile/target or fallback to move/interact
@@ -624,7 +675,7 @@ export async function boot() {
 
   // 15. Wire State Changes to Renderer View Model & Game Over
   bus.on('state:changed', ({ state }) => {
-    renderer.setView(buildViewModel(state));
+    updateViewModel();
     checkGameOver(state);
   });
 
@@ -648,9 +699,8 @@ export async function boot() {
 
   // 16. Start First Turn & Initial Render
   turns.start();
-  const initialState = store.getState();
-  renderer.setView(buildViewModel(initialState));
-  checkGameOver(initialState);
+  updateViewModel();
+  checkGameOver(store.getState());
 
   // Debug globals if requested
   if (debug) {
