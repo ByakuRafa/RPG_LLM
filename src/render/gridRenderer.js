@@ -100,12 +100,29 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE, getSetti
   /* ------------------------------- Drawing ------------------------------- */
 
   function drawTiles(map) {
-    if (!map || !map.grid) return;
+    if (!map) return;
+    const tiles = map.tiles || map.grid;
+    if (!tiles) return;
+
+    const width = map.width || (tiles[0] ? tiles[0].length : 12);
+    const height = map.height || tiles.length || 12;
+
+    const isWallTile = (x, y) => {
+      if (x < 0 || x >= width || y < 0 || y >= height) return false;
+      const t = tiles[y]?.[x];
+      return t === TILE.WALL || t === '#' || t === 1;
+    };
+
+    const isFloorTile = (x, y) => {
+      if (x < 0 || x >= width || y < 0 || y >= height) return false;
+      const t = tiles[y]?.[x];
+      return t === TILE.FLOOR || t === '.' || t === 0;
+    };
 
     // Pass 1: Floor tiles (warm limestone checkerboard modulation + inner mortar lines)
-    for (let y = 0; y < map.height; y++) {
-      for (let x = 0; x < map.width; x++) {
-        if (map.grid[y][x] === TILE.FLOOR) {
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        if (isFloorTile(x, y)) {
           const px = x * tileSize;
           const py = y * tileSize;
           const isEven = (x + y) % 2 === 0;
@@ -123,14 +140,14 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE, getSetti
     }
 
     // Pass 2: Subtle drop shadows cast from walls onto south floor tiles
-    for (let y = 0; y < map.height; y++) {
-      for (let x = 0; x < map.width; x++) {
-        if (map.grid[y][x] === TILE.WALL) {
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        if (isWallTile(x, y)) {
           const px = x * tileSize;
           const py = y * tileSize;
 
           // Drop shadow cast onto south tile if it is a floor tile
-          if (y + 1 < map.height && map.grid[y + 1][x] === TILE.FLOOR) {
+          if (y + 1 < height && isFloorTile(x, y + 1)) {
             const shadowH = 6;
             const shadowGrad = ctx.createLinearGradient(0, py + tileSize, 0, py + tileSize + shadowH);
             shadowGrad.addColorStop(0, "rgba(15, 23, 42, 0.28)");
@@ -143,9 +160,9 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE, getSetti
     }
 
     // Pass 3: 2.5D raised dungeon stone blocks
-    for (let y = 0; y < map.height; y++) {
-      for (let x = 0; x < map.width; x++) {
-        if (map.grid[y][x] === TILE.WALL) {
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        if (isWallTile(x, y)) {
           const px = x * tileSize;
           const py = y * tileSize;
 
@@ -169,6 +186,32 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE, getSetti
           ctx.fillStyle = "rgba(0, 0, 0, 0.12)";
           ctx.fillRect(px, py, 1, tileSize);
           ctx.fillRect(px + tileSize - 1, py, 1, tileSize);
+
+          // Medieval stone brick mortar accents on the top face
+          ctx.strokeStyle = "rgba(15, 23, 42, 0.25)";
+          ctx.lineWidth = 1;
+          const midY = py + Math.floor((tileSize - 10) / 2);
+          ctx.beginPath();
+          ctx.moveTo(px + 2, midY + 0.5);
+          ctx.lineTo(px + tileSize - 2, midY + 0.5);
+
+          const isRowEven = (x + y) % 2 === 0;
+          if (isRowEven) {
+            ctx.moveTo(px + Math.floor(tileSize * 0.5) + 0.5, py + 2);
+            ctx.lineTo(px + Math.floor(tileSize * 0.5) + 0.5, midY);
+            ctx.moveTo(px + Math.floor(tileSize * 0.25) + 0.5, midY);
+            ctx.lineTo(px + Math.floor(tileSize * 0.25) + 0.5, py + tileSize - 10);
+            ctx.moveTo(px + Math.floor(tileSize * 0.75) + 0.5, midY);
+            ctx.lineTo(px + Math.floor(tileSize * 0.75) + 0.5, py + tileSize - 10);
+          } else {
+            ctx.moveTo(px + Math.floor(tileSize * 0.33) + 0.5, py + 2);
+            ctx.lineTo(px + Math.floor(tileSize * 0.33) + 0.5, midY);
+            ctx.moveTo(px + Math.floor(tileSize * 0.67) + 0.5, py + 2);
+            ctx.lineTo(px + Math.floor(tileSize * 0.67) + 0.5, midY);
+            ctx.moveTo(px + Math.floor(tileSize * 0.5) + 0.5, midY);
+            ctx.lineTo(px + Math.floor(tileSize * 0.5) + 0.5, py + tileSize - 10);
+          }
+          ctx.stroke();
         }
       }
     }

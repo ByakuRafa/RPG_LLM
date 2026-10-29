@@ -67,14 +67,22 @@
   padding: 0;
 }
 
+html {
+  box-sizing: border-box;
+  height: 100%;
+}
+
 body {
   background-color: var(--bg-app);
   color: var(--text-main);
   font-family: var(--font-sans);
   font-size: 14px;
   line-height: 1.5;
-  min-height: 100vh;
-  overflow-x: hidden;
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100vh;
+  max-height: 100dvh;
+  overflow: hidden;
 }
 
 /* ---------------- Main VTT Grid Layout ---------------- */
@@ -87,8 +95,12 @@ body {
     "board side"
     "hud hud";
   grid-template-columns: auto 1fr;
-  grid-template-rows: auto 1fr auto;
-  min-height: 100vh;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100vh;
+  max-height: 100dvh;
+  overflow: hidden;
   background-color: var(--bg-app);
 }
 
@@ -320,15 +332,21 @@ body {
   justify-content: center;
   background-color: var(--bg-app);
   border-right: 1px solid var(--border-outer);
-  padding: 24px;
+  padding: 16px;
   overflow: hidden;
   position: relative;
+  min-height: 0;
+  min-width: 0;
 }
 
 #board {
   display: block;
   width: 768px;
   height: 768px;
+  max-width: 100%;
+  max-height: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: contain;
   image-rendering: pixelated;
   image-rendering: crisp-edges;
   background-color: #EAE4D8;
@@ -351,6 +369,8 @@ body {
   gap: 16px;
   overflow: hidden;
   height: 100%;
+  min-height: 0;
+  min-width: 0;
 }
 
 .side-panel-section {
@@ -377,6 +397,7 @@ body {
   padding: 10px 14px;
   background-color: var(--bg-subtle);
   border-bottom: 1px solid var(--border-outer);
+  flex-shrink: 0;
 }
 
 .panel-title-group {
@@ -480,10 +501,12 @@ body {
 }
 
 .log-list {
-  flex: 1;
+  flex: 1 1 0%;
+  min-height: 0;
   list-style: none;
   padding: 6px 10px;
   overflow-y: auto;
+  overflow-x: hidden;
   font-family: var(--font-sans);
   font-size: 12px;
   line-height: 1.5;
@@ -491,6 +514,25 @@ body {
   display: flex;
   flex-direction: column;
   gap: 3px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(197, 160, 89, 0.45) transparent;
+}
+
+.log-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.log-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.log-list::-webkit-scrollbar-thumb {
+  background: rgba(197, 160, 89, 0.35);
+  border-radius: 4px;
+}
+
+.log-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(197, 160, 89, 0.65);
 }
 
 .log-row {
@@ -1243,6 +1285,7 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  overflow: hidden;
   transition: flex var(--transition-normal);
 }
 
@@ -1250,6 +1293,8 @@ body {
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
+  overflow: hidden;
   padding: 12px;
   gap: 10px;
 }
@@ -1260,6 +1305,7 @@ body {
   align-items: center;
   padding-bottom: 8px;
   border-bottom: 1px solid var(--border-outer);
+  flex-shrink: 0;
 }
 
 .chat-title-group {
@@ -1303,12 +1349,34 @@ body {
 }
 
 .chat-history {
-  flex: 1;
+  flex: 1 1 0%;
+  min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding-right: 4px;
+  padding-right: 6px;
+  scroll-behavior: smooth;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(197, 160, 89, 0.45) transparent;
+}
+
+.chat-history::-webkit-scrollbar {
+  width: 6px;
+}
+
+.chat-history::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.chat-history::-webkit-scrollbar-thumb {
+  background: rgba(197, 160, 89, 0.35);
+  border-radius: 4px;
+}
+
+.chat-history::-webkit-scrollbar-thumb:hover {
+  background: rgba(197, 160, 89, 0.65);
 }
 
 .chat-entry {
@@ -1482,6 +1550,7 @@ body {
   font-family: var(--font-title);
   font-weight: 700;
   letter-spacing: 0.3px;
+  flex-shrink: 0;
   box-shadow: 0 4px 14px rgba(197, 160, 89, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.9);
   animation: spellPillFloat 3s ease-in-out infinite alternate;
   margin-bottom: 2px;
@@ -2039,6 +2108,7 @@ button:disabled {
   font-size: 11px;
   color: #8A6D3B;
   font-weight: 600;
+  flex-shrink: 0;
 }
 
 .btn-chat-cancel {

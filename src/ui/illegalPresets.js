@@ -27,7 +27,7 @@ export function buildIllegalPresets(state) {
   const ay = active.position.y;
   const mp = active.mp ?? 4;
   const map = state.map;
-  const grid = map?.grid || [];
+  const grid = map?.tiles || map?.grid || [];
   const width = map?.width || 12;
   const height = map?.height || 12;
 
