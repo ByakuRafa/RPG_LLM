@@ -232,7 +232,7 @@ export function buildStateSnapshot(state, config = 'B') {
 
   // Inventory (sorted by ID)
   // Shared party inventory is stored in state.inventory; fallback to activeHero items/inventory if present
-  const rawInventory = (Array.isArray(state?.inventory) && state.inventory.length > 0)
+  const rawInventory = Array.isArray(state?.inventory)
     ? state.inventory
     : (activeHero?.inventory || activeHero?.items || []);
 
@@ -241,6 +241,7 @@ export function buildStateSnapshot(state, config = 'B') {
     .sort((a, b) => a.id.localeCompare(b.id))
     .map((item) => ({
       id: item.id,
+      label: ITEMS[item.id]?.label || item.id,
       name: ITEMS[item.id]?.label || item.id,
       qty: item.qty,
       usable: Boolean(ITEMS[item.id]?.usable)
