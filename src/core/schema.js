@@ -109,26 +109,66 @@ export function toSlug(str) {
 export function resolveSemanticTarget(rawTarget, state = null, casterId = null) {
   if (typeof rawTarget !== 'string' || !rawTarget.trim()) return rawTarget;
   const slug = toSlug(rawTarget);
+  const normalizedTarget = stripAccents(rawTarget).toLowerCase().trim();
 
   // 1. Self / caster aliases
   if (['self', 'mim', 'eu', 'me', 'myself', 'proprio', 'propria', 'si', 'si_mesmo', 'si_mesma'].includes(slug)) {
     return casterId || state?.activeId || rawTarget;
   }
 
-  // 2. Roster hero name / class aliases
-  if (['thorin', 'guerreiro', 'warrior'].includes(slug)) return 'hero_warrior';
-  if (['lyra', 'mago', 'maga', 'mage'].includes(slug)) return 'hero_mage';
-  if (['vex', 'ladino', 'ladina', 'rogue'].includes(slug)) return 'hero_rogue';
-
-  // 3. Exact key match in state entities/objects
+  // 2. Exact key match in state entities/objects
   if (state?.entities?.[rawTarget]) return rawTarget;
   if (state?.objects?.[rawTarget]) return rawTarget;
 
-  // 4. Entity match by ID or name in state (accent and case-insensitive)
+  // 3. Dynamic match against state entities by name (full or first word), title (full or first word), or ID
   if (state?.entities) {
     const entList = Object.values(state.entities);
-    const byName = entList.find(e => e && (toSlug(e.name) === slug || toSlug(e.id) === slug));
-    if (byName) return byName.id;
+    const byEntity = entList.find(e => {
+      if (!e) return false;
+      if (toSlug(e.id) === slug) return true;
+
+      if (e.name) {
+        const fullSlug = toSlug(e.name);
+        if (fullSlug === slug || stripAccents(e.name).toLowerCase().trim() === normalizedTarget) return true;
+        const firstWord = (e.name || '').trim().split(/[\s,.-]+/)[0];
+        if (firstWord && (toSlug(firstWord) === slug || stripAccents(firstWord).toLowerCase().trim() === normalizedTarget)) {
+          return true;
+        }
+      }
+
+      if (e.title) {
+        const titleSlug = toSlug(e.title);
+        if (titleSlug === slug || stripAccents(e.title).toLowerCase().trim() === normalizedTarget) return true;
+        const firstTitleWord = (e.title || '').trim().split(/[\s,.-]+/)[0];
+        if (firstTitleWord && (toSlug(firstTitleWord) === slug || stripAccents(firstTitleWord).toLowerCase().trim() === normalizedTarget)) {
+          return true;
+        }
+      }
+
+      return false;
+    });
+
+    if (byEntity) return byEntity.id;
+  }
+
+  // 4. Default Roster hero name / class aliases
+  if (['thorin', 'guerreiro', 'warrior'].includes(slug)) {
+    if (state?.entities?.hero_warrior) return 'hero_warrior';
+    const warrior = Object.values(state?.entities || {}).find(e => e?.classId === 'warrior' && e.role === 'player');
+    if (warrior) return warrior.id;
+    return 'hero_warrior';
+  }
+  if (['lyra', 'mago', 'maga', 'mage'].includes(slug)) {
+    if (state?.entities?.hero_mage) return 'hero_mage';
+    const mage = Object.values(state?.entities || {}).find(e => e?.classId === 'mage' && e.role === 'player');
+    if (mage) return mage.id;
+    return 'hero_mage';
+  }
+  if (['vex', 'ladino', 'ladina', 'rogue'].includes(slug)) {
+    if (state?.entities?.hero_rogue) return 'hero_rogue';
+    const rogue = Object.values(state?.entities || {}).find(e => e?.classId === 'rogue' && e.role === 'player');
+    if (rogue) return rogue.id;
+    return 'hero_rogue';
   }
 
   // 5. Object match by ID or label/name in state

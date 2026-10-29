@@ -23,7 +23,8 @@ export function beginHeroTurn(s, heroId) {
   next.phase = PHASE.HERO;
   next.activeId = heroId;
 
-  const idx = TURN_ORDER.indexOf(heroId);
+  const turnOrder = s.turnOrder || TURN_ORDER;
+  const idx = turnOrder.indexOf(heroId);
   if (idx >= 0) {
     next.turnIndex = idx;
   }
@@ -53,7 +54,8 @@ export function beginEnemyPhase(s) {
   next.phase = PHASE.ENEMY;
   next.activeId = ENEMY_PHASE_ID;
 
-  const idx = TURN_ORDER.indexOf(ENEMY_PHASE_ID);
+  const turnOrder = s.turnOrder || TURN_ORDER;
+  const idx = turnOrder.indexOf(ENEMY_PHASE_ID);
   if (idx >= 0) {
     next.turnIndex = idx;
   }
@@ -75,31 +77,32 @@ export function beginEnemyPhase(s) {
  * @returns {{ state: object, events: object[] }}
  */
 export function advanceTurn(s) {
-  let nextIndex = (s.turnIndex + 1) % TURN_ORDER.length;
-  let nextRound = s.round + (s.turnIndex + 1 >= TURN_ORDER.length ? 1 : 0);
+  const turnOrder = s.turnOrder || TURN_ORDER;
+  let nextIndex = (s.turnIndex + 1) % turnOrder.length;
+  let nextRound = s.round + (s.turnIndex + 1 >= turnOrder.length ? 1 : 0);
 
-  for (let steps = 0; steps < TURN_ORDER.length; steps++) {
-    const candidateId = TURN_ORDER[nextIndex];
+  for (let steps = 0; steps < turnOrder.length; steps++) {
+    const candidateId = turnOrder[nextIndex];
     if (candidateId === ENEMY_PHASE_ID) {
-      const stateWithRound = { ...s, round: nextRound, turnIndex: nextIndex };
+      const stateWithRound = { ...s, round: nextRound, turnIndex: nextIndex, turnOrder };
       return beginEnemyPhase(stateWithRound);
     }
 
     const hero = s.entities[candidateId];
     if (hero && hero.alive) {
-      const stateWithRound = { ...s, round: nextRound, turnIndex: nextIndex };
+      const stateWithRound = { ...s, round: nextRound, turnIndex: nextIndex, turnOrder };
       return beginHeroTurn(stateWithRound, candidateId);
     }
 
     // Dead hero -> skip to next
-    nextIndex = (nextIndex + 1) % TURN_ORDER.length;
+    nextIndex = (nextIndex + 1) % turnOrder.length;
     if (nextIndex === 0) {
       nextRound++;
     }
   }
 
   // Fallback if all heroes are dead
-  const stateWithRound = { ...s, round: nextRound, turnIndex: nextIndex };
+  const stateWithRound = { ...s, round: nextRound, turnIndex: nextIndex, turnOrder };
   return beginEnemyPhase(stateWithRound);
 }
 
@@ -111,7 +114,11 @@ export function advanceTurn(s) {
  */
 export function createTurnController({ store, bus, queue, enemyController = null }) {
   function start() {
-    const { state, events } = beginHeroTurn(store.getState(), 'hero_warrior');
+    const current = store.getState();
+    const firstHeroId = (current.turnOrder && current.turnOrder[0] !== ENEMY_PHASE_ID)
+      ? current.turnOrder[0]
+      : 'hero_warrior';
+    const { state, events } = beginHeroTurn(current, firstHeroId);
     store.commit(state, events);
     bus?.emit('turn:changed', { activeId: state.activeId, round: state.round, phase: state.phase });
     const heroName = state.entities[state.activeId]?.name || 'Thorin';

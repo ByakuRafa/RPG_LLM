@@ -8,6 +8,7 @@ import { CONFIG, PHASE } from './core/config.js';
 import { createEventBus } from './core/eventBus.js';
 import { FIXTURES } from './core/fixtures.js';
 import { loadSettings, initSettings, hasApiKey } from './core/settings.js';
+import { loadActivePartyRoster } from './core/characterStorage.js';
 import { createInitialState, createStore } from './engine/gameState.js';
 import { TOOLS } from './engine/tools.js';
 import { createActionQueue } from './engine/actionQueue.js';
@@ -129,7 +130,8 @@ export async function boot() {
   });
 
   // 3. State Store
-  const store = createStore(createInitialState(seed), bus);
+  const initialRoster = loadActivePartyRoster();
+  const store = createStore(createInitialState(seed, { roster: initialRoster }), bus);
 
   // 4. Canvas Renderer
   const canvas = document.getElementById('board');
@@ -413,7 +415,8 @@ export async function boot() {
     currentHoverTile = null;
     if (overlayEl && overlayEl.open) overlayEl.close();
     const effectiveSeed = newSeed || seed;
-    store.reset(createInitialState(effectiveSeed));
+    const activeRoster = loadActivePartyRoster();
+    store.reset(createInitialState(effectiveSeed, { roster: activeRoster }));
     turns.start();
     updateViewModel();
   });

@@ -336,8 +336,9 @@ export function mountHud(rootEl, bus, { getState } = {}) {
 
     // 3. Right: Party mini-cards + End Turn button
     let partyMiniHtml = '';
-    for (const roster of HERO_ROSTER) {
-      const hero = s.entities?.[roster.id];
+    const activeHeroIds = (s.turnOrder ? s.turnOrder.filter(id => id !== ENEMY_PHASE_ID) : null) || HERO_ROSTER.map(r => r.id);
+    for (const heroId of activeHeroIds) {
+      const hero = s.entities?.[heroId];
       if (!hero) continue;
       const cls = CLASSES[hero.classId] || {};
       const isActive = hero.id === activeId;

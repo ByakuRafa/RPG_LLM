@@ -12,6 +12,17 @@ import { advanceTurn } from '../src/engine/turnTracker.js';
 import { validateMove } from '../src/engine/rules.js';
 import { createActionQueue } from '../src/engine/actionQueue.js';
 import { normalizeBatch, validateBatch } from '../src/core/schema.js';
+import { createInitialState } from '../src/engine/gameState.js';
+import {
+  DEFAULT_SHEETS,
+  validateSheet,
+  loadSavedSheets,
+  saveSheet,
+  deleteSheet,
+  loadActivePartyRoster,
+  saveActivePartyRoster,
+  resetToDefaultParty
+} from '../src/core/characterStorage.js';
 
 describe('PRNG & Determinismo', () => {
   it('createRng("X") gera sequências idênticas para a mesma seed e diferentes para "Y"', () => {
@@ -322,5 +333,287 @@ describe('Schema e Normalização', () => {
     const resUnknown = validateBatch(unknownToolBatch);
     assert(!resUnknown.ok);
     assert(resUnknown.errors.some(e => e.includes('UNKNOWN_TOOL')));
+  });
+});
+
+describe('Character Sheet System & Dynamic Roster (Sprint 1)', () => {
+  it('validateSheet valida regras de Point-Buy, orçamento, habilidades e campos obrigatórios', () => {
+    // Ficha customizada válida (24 HP = +2 pts, 5 MP = +2 pts -> 4/6 pontos gastos)
+    const validCustom = {
+      id: 'hero_kaelen',
+      name: 'Kaelen, o Sombrio',
+      classId: 'rogue',
+      maxHp: 24,
+      maxMp: 5,
+      maxAp: 1,
+      abilities: ['backstab', 'lockpick', 'slash']
+    };
+    const resValid = validateSheet(validCustom);
+    assert(resValid.valid, `Ficha válida deveria passar: ${resValid.errors?.join(', ')}`);
+
+    // Estouro de orçamento de Point-Buy (36 HP = 6 pts, 5 MP = 2 pts -> 8/6 pontos gastos)
+    const overflowCustom = {
+      ...validCustom,
+      id: 'hero_overflow',
+      maxHp: 36,
+      maxMp: 5
+    };
+    const resOverflow = validateSheet(overflowCustom);
+    assert(!resOverflow.valid, 'Estouro de orçamento deve falhar');
+    assert(resOverflow.errors.some(e => e.includes('Orçamento de Point-Buy excedido')));
+
+    // maxAp diferente de 1
+    const invalidAp = { ...validCustom, maxAp: 2 };
+    const resAp = validateSheet(invalidAp);
+    assert(!resAp.valid, 'maxAp !== 1 deve falhar');
+
+    // maxHp fora de múltiplos de 3 (ex: 22 para ficha customizada não canônica)
+    const nonStepHp = { ...validCustom, maxHp: 22 };
+    const resNonStep = validateSheet(nonStepHp);
+    assert(!resNonStep.valid, 'maxHp fora de múltiplos da base 18 + 3 deve falhar');
+
+    // Habilidades vazias ou excesso (> 3)
+    const emptyAbilities = { ...validCustom, abilities: [] };
+    assert(!validateSheet(emptyAbilities).valid, 'Zero habilidades deve falhar');
+
+    const tooManyAbilities = { ...validCustom, abilities: ['slash', 'shield_bash', 'whirlwind', 'firebolt'] };
+    assert(!validateSheet(tooManyAbilities).valid, 'Mais de 3 habilidades para custom deve falhar');
+
+    // Habilidade inexistente no catálogo
+    const unknownAbility = { ...validCustom, abilities: ['magia_inexistente'] };
+    assert(!validateSheet(unknownAbility).valid, 'Habilidade inexistente deve falhar');
+
+    // Todas as fichas canônicas padrão (Thorin, Lyra, Vex) devem ser válidas
+    for (const def of DEFAULT_SHEETS) {
+      const resDef = validateSheet(def);
+      assert(resDef.valid, `DEFAULT_SHEET de ${def.name} deve ser válida: ${resDef.errors?.join(', ')}`);
+    }
+  });
+
+  it('createInitialState com default options preserva comportamento canônico (Benchmark Protection)', () => {
+    const s = createInitialState(CONFIG.DEFAULT_SEED);
+    assertEqual(s.entities.hero_warrior.name, 'Thorin');
+    assertEqual(s.entities.hero_warrior.maxHp, 30);
+    assertEqual(s.entities.hero_mage.name, 'Lyra');
+    assertEqual(s.entities.hero_mage.maxHp, 18);
+    assertEqual(s.entities.hero_rogue.name, 'Vex');
+    assertEqual(s.entities.hero_rogue.maxHp, 22);
+
+    // Inventário padrão
+    assertDeepEqual(s.inventory, [{ id: 'health_potion', qty: 2 }]);
+
+    // Ordem de turno padrão
+    assertDeepEqual(s.turnOrder, ['hero_warrior', 'hero_mage', 'hero_rogue', ENEMY_PHASE_ID]);
+    assertEqual(s.activeId, 'hero_warrior');
+  });
+
+  it('createInitialState com custom 3-hero roster configura nomes, status, habilidades, lore e inventário agregado', () => {
+    const customRoster = [
+      {
+        id: 'hero_kaelen',
+        name: 'Kaelen, o Sombrio',
+        classId: 'rogue',
+        player: 1,
+        title: 'Lâmina Noturna',
+        backstory: 'Ex-espião da corte exilado nas catacumbas.',
+        personality: 'Metódico e silencioso.',
+        alignment: 'Caótico e Bom',
+        maxHp: 24,
+        maxMp: 5,
+        maxAp: 1,
+        abilities: ['backstab', 'lockpick', 'slash'],
+        startingItems: [{ id: 'health_potion', qty: 2 }]
+      },
+      {
+        id: 'hero_elena',
+        name: 'Elena Alvorada',
+        classId: 'mage',
+        player: 2,
+        title: 'Sacerdotisa da Luz',
+        backstory: 'Devota dedicada à cura dos feridos.',
+        personality: 'Altruísta e corajosa.',
+        alignment: 'Leal e Boa',
+        maxHp: 21,
+        maxMp: 6,
+        maxAp: 1,
+        abilities: ['heal_pulse', 'divine_prayer'],
+        startingItems: [{ id: 'health_potion', qty: 1 }]
+      },
+      {
+        id: 'hero_bram',
+        name: 'Bram Punho de Pedra',
+        classId: 'warrior',
+        player: 3,
+        title: 'Guardião da Montanha',
+        backstory: 'Guerreiro das pedreiras ancestrais.',
+        personality: 'Calmo como uma rocha.',
+        alignment: 'Neutro e Bom',
+        maxHp: 33,
+        maxMp: 4,
+        maxAp: 1,
+        abilities: ['slash', 'shield_bash'],
+        startingItems: []
+      }
+    ];
+
+    const s = createInitialState(CONFIG.DEFAULT_SEED, { roster: customRoster });
+
+    // Verifica herói 1
+    assertEqual(s.entities.hero_kaelen.name, 'Kaelen, o Sombrio');
+    assertEqual(s.entities.hero_kaelen.title, 'Lâmina Noturna');
+    assertEqual(s.entities.hero_kaelen.backstory, 'Ex-espião da corte exilado nas catacumbas.');
+    assertEqual(s.entities.hero_kaelen.personality, 'Metódico e silencioso.');
+    assertEqual(s.entities.hero_kaelen.alignment, 'Caótico e Bom');
+    assertEqual(s.entities.hero_kaelen.maxHp, 24);
+    assertEqual(s.entities.hero_kaelen.hp, 24);
+    assertEqual(s.entities.hero_kaelen.maxMp, 5);
+    assertEqual(s.entities.hero_kaelen.mp, 5);
+    assertDeepEqual(s.entities.hero_kaelen.abilities, ['backstab', 'lockpick', 'slash']);
+
+    // Verifica herói 2 e 3
+    assertEqual(s.entities.hero_elena.name, 'Elena Alvorada');
+    assertEqual(s.entities.hero_bram.name, 'Bram Punho de Pedra');
+
+    // Ordem dinâmica de turnos e herói ativo inicial
+    assertDeepEqual(s.turnOrder, ['hero_kaelen', 'hero_elena', 'hero_bram', ENEMY_PHASE_ID]);
+    assertEqual(s.activeId, 'hero_kaelen');
+
+    // Agregação de startingItems (2 do Kaelen + 1 da Elena = 3 health_potion)
+    assertDeepEqual(s.inventory, [{ id: 'health_potion', qty: 3 }]);
+  });
+
+  it('normalizeBatch resolve nome de herói customizado (ex: "Kaelen") para o ID da entidade em heal_pulse e use_item', () => {
+    const customRoster = [
+      {
+        id: 'hero_kaelen',
+        name: 'Kaelen, o Sombrio',
+        classId: 'rogue',
+        player: 1,
+        title: 'Lâmina Noturna',
+        maxHp: 24,
+        maxMp: 5,
+        maxAp: 1,
+        abilities: ['backstab', 'lockpick']
+      },
+      {
+        id: 'hero_elena',
+        name: 'Elena Alvorada',
+        classId: 'mage',
+        player: 2,
+        title: 'Sacerdotisa da Luz',
+        maxHp: 21,
+        maxMp: 6,
+        maxAp: 1,
+        abilities: ['heal_pulse']
+      },
+      {
+        id: 'hero_bram',
+        name: 'Bram Punho de Pedra',
+        classId: 'warrior',
+        player: 3,
+        title: 'Guardião da Montanha',
+        maxHp: 33,
+        maxMp: 4,
+        maxAp: 1,
+        abilities: ['slash']
+      }
+    ];
+
+    const s = createInitialState(CONFIG.DEFAULT_SEED, { roster: customRoster });
+
+    // 1. Resolução em heal_pulse: caster "Elena" -> "hero_elena", target "Kaelen" -> "hero_kaelen"
+    const rawHeal = {
+      tool_calls: [
+        {
+          name: 'heal_pulse',
+          arguments: {
+            caster_id: 'Elena',
+            target_id: 'Kaelen'
+          }
+        }
+      ]
+    };
+    const normHeal = normalizeBatch(rawHeal, s);
+    assertEqual(normHeal.tool_calls[0].name, 'use_ability');
+    assertEqual(normHeal.tool_calls[0].arguments.ability_id, 'heal_pulse');
+    assertEqual(normHeal.tool_calls[0].arguments.caster_id, 'hero_elena');
+    assertEqual(normHeal.tool_calls[0].arguments.target_id, 'hero_kaelen');
+
+    // 2. Resolução em use_item: target "Kaelen" -> "hero_kaelen"
+    const rawItem = {
+      tool_calls: [
+        {
+          name: 'use_item',
+          arguments: {
+            character_id: 'hero_bram',
+            item_id: 'pocao_de_vida',
+            target_id: 'Kaelen'
+          }
+        }
+      ]
+    };
+    const normItem = normalizeBatch(rawItem, s);
+    assertEqual(normItem.tool_calls[0].arguments.item_id, 'health_potion');
+    assertEqual(normItem.tool_calls[0].arguments.target_id, 'hero_kaelen');
+
+    // 3. Resolução pelo título "Lâmina Noturna" -> "hero_kaelen"
+    const rawTitle = {
+      tool_calls: [
+        {
+          name: 'use_item',
+          arguments: {
+            character_id: 'hero_bram',
+            item_id: 'health_potion',
+            target_id: 'Lâmina Noturna'
+          }
+        }
+      ]
+    };
+    const normTitle = normalizeBatch(rawTitle, s);
+    assertEqual(normTitle.tool_calls[0].arguments.target_id, 'hero_kaelen');
+  });
+
+  it('characterStorage gerencia sheets salvas e active party roster', () => {
+    // Reset para party padrão
+    const defParty = resetToDefaultParty();
+    assertEqual(defParty.length, 3);
+    assertEqual(defParty[0].id, 'hero_warrior');
+    assertEqual(defParty[1].id, 'hero_mage');
+    assertEqual(defParty[2].id, 'hero_rogue');
+
+    // Salva ficha customizada válida
+    const customSheet = {
+      id: 'hero_valkyrie',
+      name: 'Freya',
+      classId: 'warrior',
+      title: 'Valquíria de Ferro',
+      maxHp: 27,
+      maxMp: 4,
+      maxAp: 1,
+      abilities: ['slash', 'shield_bash'],
+      startingItems: [{ id: 'health_potion', qty: 1 }]
+    };
+    saveSheet(customSheet);
+
+    const saved = loadSavedSheets();
+    assert(saved.some(s => s.id === 'hero_valkyrie'), 'Ficha customizada deve estar em loadSavedSheets()');
+
+    // Salva novo grupo ativo usando Freya no slot 1
+    const active = saveActivePartyRoster(['hero_valkyrie', 'hero_mage', 'hero_rogue']);
+    assertEqual(active[0].id, 'hero_valkyrie');
+    assertEqual(active[0].player, 1);
+    assertEqual(active[1].id, 'hero_mage');
+    assertEqual(active[1].player, 2);
+
+    // Deletar custom sheet
+    const deleted = deleteSheet('hero_valkyrie');
+    assert(deleted, 'Deve permitir deletar ficha customizada');
+
+    // Após deletar ficha do grupo ativo, o slot faz fallback para o herói padrão do slot
+    const rosterAfterDelete = loadActivePartyRoster();
+    assertEqual(rosterAfterDelete[0].id, 'hero_warrior');
+
+    // Tentativa de deletar herói canônico padrão deve ser rejeitada
+    assert(!deleteSheet('hero_warrior'), 'Não deve permitir deletar herói padrão');
   });
 });

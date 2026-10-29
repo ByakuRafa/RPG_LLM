@@ -63,7 +63,7 @@ export function mountTurnBar(rootEl, bus, { getState, isFakeLlm = false } = {}) 
       const ribbon = document.createElement('div');
       ribbon.className = 'initiative-ribbon';
 
-      const order = TURN_ORDER || ['hero_warrior', 'hero_mage', 'hero_rogue', ENEMY_PHASE_ID];
+      const order = state.turnOrder || TURN_ORDER || ['hero_warrior', 'hero_mage', 'hero_rogue', ENEMY_PHASE_ID];
 
       order.forEach((unitId, idx) => {
         if (idx > 0) {

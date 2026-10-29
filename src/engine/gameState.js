@@ -2,7 +2,7 @@
  * Game state: factory, pure selectors, reducers, and store.
  * Zero DOM, Zero Canvas, 100% pure JS logic.
  */
-import { CONFIG, PHASE } from '../core/config.js';
+import { CONFIG, PHASE, ENEMY_PHASE_ID } from '../core/config.js';
 import { hashString } from '../core/prng.js';
 import { toSlug } from '../core/schema.js';
 import { CLASSES, ABILITIES, ITEMS, HERO_ROSTER } from './catalog.js';
@@ -23,12 +23,16 @@ export function createEntity(spec) {
   return {
     id: spec.id,
     name: spec.name ?? cls.label ?? spec.id,
+    title: spec.title ?? null,
+    backstory: spec.backstory ?? null,
+    personality: spec.personality ?? null,
+    alignment: spec.alignment ?? null,
     role: spec.role ?? (spec.classId === 'goblin' ? 'enemy' : 'player'),
     classId: spec.classId,
     player: spec.player ?? null,
     color: spec.color ?? cls.color ?? '#FFFFFF',
     initial: spec.initial ?? cls.initial ?? '?',
-    tokenUrl: spec.tokenUrl ?? null,
+    tokenUrl: spec.tokenUrl ?? cls.tokenUrl ?? null,
     position: {
       x: spec.position?.x ?? spec.x ?? 0,
       y: spec.position?.y ?? spec.y ?? 0
@@ -47,17 +51,31 @@ export function createEntity(spec) {
 /**
  * Creates initial game state for a given seed.
  * @param {string} [seed=CONFIG.DEFAULT_SEED]
+ * @param {object} [options={}] Optional options such as { roster: Array }
  * @returns {object} Initial GameState
  */
-export function createInitialState(seed = CONFIG.DEFAULT_SEED) {
+export function createInitialState(seed = CONFIG.DEFAULT_SEED, options = {}) {
   const dungeon = generateDungeon(seed);
   const entities = {};
 
-  // Heroes from HERO_ROSTER + dungeon hero spawns
-  for (const hero of HERO_ROSTER) {
-    const spawnPos = dungeon.spawns.heroes[hero.id] || { x: 2, y: 10 };
-    entities[hero.id] = createEntity({
+  const defaultHeroSpawns = [
+    dungeon.spawns.heroes?.hero_warrior || { x: 2, y: 10 },
+    dungeon.spawns.heroes?.hero_mage    || { x: 1, y: 10 },
+    dungeon.spawns.heroes?.hero_rogue   || { x: 3, y: 10 }
+  ];
+
+  const hasCustomRoster = Array.isArray(options.roster) && options.roster.length === 3;
+  const roster = hasCustomRoster ? options.roster : HERO_ROSTER;
+
+  // Heroes from roster + dungeon hero spawns
+  for (let i = 0; i < roster.length; i++) {
+    const hero = roster[i];
+    const spawnPos = dungeon.spawns.heroes?.[hero.id] || defaultHeroSpawns[i] || { x: 2, y: 10 };
+    const heroId = hero.id || `hero_${i + 1}`;
+    entities[heroId] = createEntity({
       ...hero,
+      id: heroId,
+      player: hero.player ?? (i + 1),
       role: 'player',
       position: { x: spawnPos.x, y: spawnPos.y }
     });
@@ -90,6 +108,30 @@ export function createInitialState(seed = CONFIG.DEFAULT_SEED) {
     };
   }
 
+  // Aggregate startingItems from roster into state.inventory
+  let inventory = [];
+  if (hasCustomRoster) {
+    const itemMap = new Map();
+    for (const hero of roster) {
+      if (Array.isArray(hero.startingItems)) {
+        for (const item of hero.startingItems) {
+          if (item && item.id && item.qty > 0) {
+            itemMap.set(item.id, (itemMap.get(item.id) || 0) + item.qty);
+          }
+        }
+      }
+    }
+    for (const [id, qty] of itemMap.entries()) {
+      inventory.push({ id, qty });
+    }
+  } else {
+    inventory = [{ id: 'health_potion', qty: 2 }];
+  }
+
+  const heroIds = roster.map((h, i) => h.id || `hero_${i + 1}`);
+  const turnOrder = [...heroIds, ENEMY_PHASE_ID];
+  const activeId = heroIds[0] || 'hero_warrior';
+
   return {
     version: 1,
     seed,
@@ -97,13 +139,14 @@ export function createInitialState(seed = CONFIG.DEFAULT_SEED) {
     phase: PHASE.HERO,
     round: 1,
     turnIndex: 0,
-    activeId: 'hero_warrior',
+    turnOrder,
+    activeId,
     floor: 1,
     maxFloors: CONFIG.MAX_FLOORS || 3,
     map: dungeon.map,
     entities,
     objects,
-    inventory: [{ id: 'health_potion', qty: 2 }],
+    inventory,
     seq: 0
   };
 }
@@ -711,16 +754,25 @@ export function advanceFloor(s, actorId = null) {
   next.map = floorDungeon.map;
 
   // Reposition living heroes at new floor entrance spawns, refresh AP/MP, give +5 HP rest heal
-  for (const hero of HERO_ROSTER) {
-    const heroEntity = next.entities[hero.id];
+  const defaultFloorSpawns = [
+    floorDungeon.spawns.heroes?.hero_warrior || { x: 2, y: 10 },
+    floorDungeon.spawns.heroes?.hero_mage    || { x: 1, y: 10 },
+    floorDungeon.spawns.heroes?.hero_rogue   || { x: 3, y: 10 }
+  ];
+  const livingHeroIds = next.turnOrder
+    ? next.turnOrder.filter(id => id !== ENEMY_PHASE_ID)
+    : HERO_ROSTER.map(h => h.id);
+
+  livingHeroIds.forEach((heroId, idx) => {
+    const heroEntity = next.entities[heroId];
     if (heroEntity && heroEntity.alive) {
-      const spawnPos = floorDungeon.spawns.heroes[hero.id] || { x: 2, y: 10 };
+      const spawnPos = floorDungeon.spawns.heroes?.[heroId] || defaultFloorSpawns[idx] || { x: 2, y: 10 };
       heroEntity.position = { x: spawnPos.x, y: spawnPos.y };
       heroEntity.ap = heroEntity.maxAp ?? 1;
       heroEntity.mp = heroEntity.maxMp ?? 4;
       heroEntity.hp = Math.min(heroEntity.maxHp, heroEntity.hp + 5);
     }
-  }
+  });
 
   // Remove old enemies and instantiate new enemies for next floor
   for (const [entId, ent] of Object.entries(next.entities)) {
