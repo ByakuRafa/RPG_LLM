@@ -5,6 +5,7 @@
  * Right: Compact RPG party mini-cards + prominent beveled gold/amber End Turn button.
  * Pure DOM layer, zero direct state mutation.
  */
+import { ENEMY_PHASE_ID } from '../core/config.js';
 import { CLASSES, ABILITIES, ITEMS, HERO_ROSTER } from '../engine/catalog.js';
 
 export const ACTION_ICONS = {

@@ -926,7 +926,9 @@ export function mountCharacterSheetModal(bus = null, { getState = null } = {}) {
     if (found) {
       setCurrentSlotSheet({
         ...structuredClone(found),
-        id: `hero_slot_${activeCreatorSlot + 1}_${Date.now()}` // Clone as a working slot instance
+        id: ['hero_warrior', 'hero_mage', 'hero_rogue'].includes(found.id)
+          ? found.id
+          : `hero_slot_${activeCreatorSlot + 1}_${Date.now()}`
       });
       renderCreator();
       showFeedback(`Ficha de "${found.name}" carregada no Jogador ${activeCreatorSlot + 1}!`, 'success');
@@ -1121,6 +1123,11 @@ export function mountCharacterSheetModal(bus = null, { getState = null } = {}) {
 
       // Emit new game intent with the active custom roster
       bus?.emit('intent:reset');
+
+      bus?.emit('chat:system', {
+        level: 'info',
+        text: `⚔️ Nova aventura iniciada com ${workingParty.map(h => h.name).join(', ')}! Vez do Jogador 1 (${workingParty[0]?.name || 'Herói'}). Clique no tabuleiro para mover, selecione habilidades no HUD ou digite sua ação no chat.`
+      });
 
       bus?.emit('log:entry', {
         level: 'INFO',

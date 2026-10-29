@@ -707,6 +707,12 @@ export async function boot() {
   updateViewModel();
   checkGameOver(store.getState());
 
+  const activeFirst = store.getState().entities?.[store.getState().activeId];
+  bus.emit('chat:system', {
+    level: 'info',
+    text: `⚔️ O jogo está pronto! Vez de ${activeFirst?.name || 'Thorin'} (Jogador 1). Clique em um quadrado verde para andar, clique em habilidades no HUD para atacar ou digite comandos no chat abaixo!`
+  });
+
   // Debug globals if requested
   if (debug) {
     window.__store = store;
