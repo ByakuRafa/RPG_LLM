@@ -322,8 +322,18 @@ export function mountHud(rootEl, bus, { getState } = {}) {
       if (hpPct <= 25) miniHpClass = 'critical';
       else if (hpPct <= 50) miniHpClass = 'warning';
 
+      // Visual highlight when an ally-targeted ability or usable item is selected
+      const isAllyOrSelfTarget = selectedTag?.kind === 'ability'
+        ? (ABILITIES[selectedTag.id]?.target === 'ally' || (ABILITIES[selectedTag.id]?.target === 'self' && isActive))
+        : (selectedTag?.kind === 'item' && ITEMS[selectedTag.id]?.usable);
+      const isTargetCandidate = !isDead && Boolean(isAllyOrSelfTarget);
+
       partyMiniHtml += `
-        <div class="party-mini-card ${isActive ? 'active' : ''} ${isDead ? 'dead' : ''}" title="${escapeHtml(hero.name)}">
+        <div
+          class="party-mini-card ${isActive ? 'active' : ''} ${isDead ? 'dead' : ''} ${isTargetCandidate ? 'target-candidate' : ''}"
+          data-hero-id="${hero.id}"
+          title="${escapeHtml(hero.name)}"
+        >
           <div class="mini-portrait-frame" style="border-color: ${cls.color || 'var(--border-gold)'};">
             <img
               src="${cls.tokenUrl || ''}"
@@ -387,6 +397,16 @@ export function mountHud(rootEl, bus, { getState } = {}) {
         selectedTag = nextTag;
         bus?.emit('ui:tagSelected', nextTag);
         render();
+      });
+    });
+
+    // Wire Party mini-card clicks
+    rootEl.querySelectorAll('.party-mini-card').forEach(card => {
+      card.addEventListener('click', () => {
+        const targetId = card.dataset.heroId;
+        if (targetId) {
+          bus?.emit('hud:partyCardClicked', { targetId });
+        }
       });
     });
 

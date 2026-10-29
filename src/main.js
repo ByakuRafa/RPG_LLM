@@ -13,8 +13,8 @@ import { TOOLS } from './engine/tools.js';
 import { createActionQueue } from './engine/actionQueue.js';
 import { createTurnController } from './engine/turnTracker.js';
 import { HeuristicEnemyStrategy, createEnemyController } from './engine/enemyController.js';
-import { computeReachable } from './engine/pathfinding.js';
-import { CLASSES, ABILITIES, HERO_ROSTER } from './engine/catalog.js';
+import { computeReachable, inBounds } from './engine/pathfinding.js';
+import { CLASSES, ABILITIES, ITEMS, HERO_ROSTER } from './engine/catalog.js';
 
 import { createLlmClient } from './llm/llmClient.js';
 import { createFakeLlmClient } from './llm/fakeLlmClient.js';
@@ -329,27 +329,195 @@ export async function boot() {
     }
   });
 
-  // 14. Wire Intent Events
+  // 14. Wire Intent Events & Tag Tracking
+  let currentSelectedTag = null;
+  let isQueueBusy = false;
+  let isLlmBusy = false;
+
+  const isBusy = () => isQueueBusy || isLlmBusy || (queue && typeof queue.isBusy === 'function' && queue.isBusy());
+
+  bus.on('queue:busy', (busy) => {
+    isQueueBusy = !!busy;
+  });
+
+  bus.on('llm:thinking', (thinking) => {
+    isLlmBusy = !!thinking;
+  });
+
+  bus.on('ui:tagSelected', (tag) => {
+    currentSelectedTag = tag;
+  });
+
+  bus.on('turn:changed', ({ phase }) => {
+    if (phase === PHASE.ENEMY) {
+      currentSelectedTag = null;
+    }
+  });
+
   bus.on('intent:enqueue', (batch) => {
     queue.enqueue(batch);
   });
 
   bus.on('intent:reset', ({ seed: newSeed } = {}) => {
     queue.clear();
+    currentSelectedTag = null;
     if (overlayEl && overlayEl.open) overlayEl.close();
     const effectiveSeed = newSeed || seed;
     store.reset(createInitialState(effectiveSeed));
     turns.start();
   });
 
-  // Tactical Board Click: move active hero to clicked reachable tile or interact with adjacent object
+  // Tactical Board Click: execute active tag on clicked tile/target or fallback to move/interact
   bus.on('board:tileClicked', ({ x, y }) => {
     if (gmPanel && typeof gmPanel.isOpen === 'function' && gmPanel.isOpen()) return;
     const s = store.getState();
-    if (s.phase !== PHASE.HERO || !s.activeId) return;
+    if (s.phase !== PHASE.HERO || !s.activeId || isBusy()) return;
     const hero = s.entities?.[s.activeId];
     if (!hero || !hero.alive) return;
 
+    // 1. Tactical Direct Click when an ability or item tag is selected
+    if (currentSelectedTag) {
+      const entityAtTile = Object.values(s.entities || {}).find(
+        e => e && e.alive && e.position?.x === x && e.position?.y === y
+      );
+      const objectAtTile = Object.values(s.objects || {}).find(
+        o => o && o.position?.x === x && o.position?.y === y
+      );
+
+      if (currentSelectedTag.kind === 'ability') {
+        const ability = ABILITIES[currentSelectedTag.id];
+        if (!ability) return;
+
+        // ability.target === 'self': clicking active hero's tile
+        if (ability.target === 'self') {
+          if ((entityAtTile && entityAtTile.id === s.activeId) || (hero.position.x === x && hero.position.y === y)) {
+            bus.emit('intent:enqueue', {
+              source: 'UI',
+              tool_calls: [{
+                name: 'use_ability',
+                arguments: {
+                  caster_id: s.activeId,
+                  ability_id: ability.id,
+                  target_id: s.activeId
+                }
+              }]
+            });
+            bus.emit('ui:tagSelected', null);
+            return;
+          }
+        }
+
+        // ability.target === 'enemy': clicking tile occupied by living enemy
+        if (ability.target === 'enemy') {
+          if (entityAtTile && entityAtTile.role === 'enemy') {
+            bus.emit('intent:enqueue', {
+              source: 'UI',
+              tool_calls: [{
+                name: 'use_ability',
+                arguments: {
+                  caster_id: s.activeId,
+                  ability_id: ability.id,
+                  target_id: entityAtTile.id
+                }
+              }]
+            });
+            bus.emit('ui:tagSelected', null);
+            return;
+          }
+        }
+
+        // ability.target === 'ally': clicking tile occupied by living hero
+        if (ability.target === 'ally') {
+          if (entityAtTile && entityAtTile.role === 'player') {
+            bus.emit('intent:enqueue', {
+              source: 'UI',
+              tool_calls: [{
+                name: 'use_ability',
+                arguments: {
+                  caster_id: s.activeId,
+                  ability_id: ability.id,
+                  target_id: entityAtTile.id
+                }
+              }]
+            });
+            bus.emit('ui:tagSelected', null);
+            return;
+          }
+        }
+
+        // ability.target === 'object': clicking adjacent object tile
+        if (ability.target === 'object') {
+          if (objectAtTile) {
+            bus.emit('intent:enqueue', {
+              source: 'UI',
+              tool_calls: [{
+                name: 'use_ability',
+                arguments: {
+                  caster_id: s.activeId,
+                  ability_id: ability.id,
+                  target_id: objectAtTile.id
+                }
+              }]
+            });
+            bus.emit('ui:tagSelected', null);
+            return;
+          }
+        }
+
+        // ability.target === 'tile' (AoE ground target): clicking any in-bounds tile
+        if (ability.target === 'tile') {
+          if (inBounds(s.map, x, y)) {
+            const args = {
+              caster_id: s.activeId,
+              ability_id: ability.id,
+              target_x: x,
+              target_y: y
+            };
+            if (entityAtTile) {
+              args.target_id = entityAtTile.id;
+            }
+            bus.emit('intent:enqueue', {
+              source: 'UI',
+              tool_calls: [{
+                name: 'use_ability',
+                arguments: args
+              }]
+            });
+            bus.emit('ui:tagSelected', null);
+            return;
+          }
+        }
+
+        // If tag is active but clicked an invalid target, do not fallback to moving
+        return;
+      }
+
+      if (currentSelectedTag.kind === 'item') {
+        const item = ITEMS[currentSelectedTag.id];
+        if (!item || !item.usable) return;
+
+        if (entityAtTile && entityAtTile.role === 'player') {
+          bus.emit('intent:enqueue', {
+            source: 'UI',
+            tool_calls: [{
+              name: 'use_item',
+              arguments: {
+                character_id: s.activeId,
+                item_id: currentSelectedTag.id,
+                target_id: entityAtTile.id
+              }
+            }]
+          });
+          bus.emit('ui:tagSelected', null);
+          return;
+        }
+
+        // If item tag is active but clicked non-player tile, do not fallback to moving
+        return;
+      }
+    }
+
+    // 2. Default behavior (selectedTag is null)
     // Check if clicked tile is reachable with hero's remaining MP
     if (hero.mp > 0) {
       const reachable = computeReachable(s, s.activeId, hero.mp);
@@ -378,6 +546,78 @@ export async function boot() {
             arguments: { character_id: hero.id, object_id: obj.id }
           }]
         });
+      }
+    }
+  });
+
+  // Tactical HUD Party Mini-Card Click
+  bus.on('hud:partyCardClicked', ({ targetId }) => {
+    if (gmPanel && typeof gmPanel.isOpen === 'function' && gmPanel.isOpen()) return;
+    const s = store.getState();
+    if (s.phase !== PHASE.HERO || !s.activeId || isBusy()) return;
+    const hero = s.entities?.[s.activeId];
+    if (!hero || !hero.alive) return;
+
+    if (!currentSelectedTag) return;
+
+    const targetAlly = s.entities?.[targetId];
+    if (!targetAlly || !targetAlly.alive) return;
+
+    if (currentSelectedTag.kind === 'ability') {
+      const ability = ABILITIES[currentSelectedTag.id];
+      if (!ability) return;
+
+      if (ability.target === 'self' && targetId === s.activeId) {
+        bus.emit('intent:enqueue', {
+          source: 'UI',
+          tool_calls: [{
+            name: 'use_ability',
+            arguments: {
+              caster_id: s.activeId,
+              ability_id: ability.id,
+              target_id: s.activeId
+            }
+          }]
+        });
+        bus.emit('ui:tagSelected', null);
+        return;
+      }
+
+      if (ability.target === 'ally' && targetAlly.role === 'player') {
+        bus.emit('intent:enqueue', {
+          source: 'UI',
+          tool_calls: [{
+            name: 'use_ability',
+            arguments: {
+              caster_id: s.activeId,
+              ability_id: ability.id,
+              target_id: targetAlly.id
+            }
+          }]
+        });
+        bus.emit('ui:tagSelected', null);
+        return;
+      }
+    }
+
+    if (currentSelectedTag.kind === 'item') {
+      const item = ITEMS[currentSelectedTag.id];
+      if (!item || !item.usable) return;
+
+      if (targetAlly.role === 'player') {
+        bus.emit('intent:enqueue', {
+          source: 'UI',
+          tool_calls: [{
+            name: 'use_item',
+            arguments: {
+              character_id: s.activeId,
+              item_id: currentSelectedTag.id,
+              target_id: targetAlly.id
+            }
+          }]
+        });
+        bus.emit('ui:tagSelected', null);
+        return;
       }
     }
   });
