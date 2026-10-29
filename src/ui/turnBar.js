@@ -41,7 +41,8 @@ export function mountTurnBar(rootEl, bus, { getState, isFakeLlm = false } = {}) 
       if (state.phase === PHASE.GAME_OVER) {
         roundEl.textContent = 'Fim de Jogo';
       } else {
-        roundEl.textContent = `Rodada ${state.round || 1}`;
+        const floorText = state.floor ? `Andar ${state.floor} · ` : '';
+        roundEl.textContent = `${floorText}Rodada ${state.round || 1}`;
       }
     }
 

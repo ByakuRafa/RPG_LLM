@@ -61,16 +61,19 @@ export function createInitialState(seed = CONFIG.DEFAULT_SEED) {
     });
   }
 
-  // Goblins from dungeon enemy spawns + CLASSES.goblin
+  // Enemies from dungeon enemy spawns
   const enemySpawns = dungeon.spawns.enemies || [];
   for (let i = 0; i < enemySpawns.length; i++) {
     const spawn = enemySpawns[i];
+    const classId = spawn.classId || 'goblin';
+    const cls = CLASSES[classId] || CLASSES.goblin;
     entities[spawn.id] = createEntity({
       id: spawn.id,
-      name: `Goblin ${i + 1}`,
-      classId: 'goblin',
+      name: spawn.name || `${cls.label || 'Inimigo'} ${i + 1}`,
+      classId,
       role: 'enemy',
-      position: { x: spawn.x, y: spawn.y }
+      position: { x: spawn.x, y: spawn.y },
+      hp: spawn.maxHp || spawn.hp || cls.maxHp
     });
   }
 
@@ -93,6 +96,8 @@ export function createInitialState(seed = CONFIG.DEFAULT_SEED) {
     round: 1,
     turnIndex: 0,
     activeId: 'hero_warrior',
+    floor: 1,
+    maxFloors: CONFIG.MAX_FLOORS || 3,
     map: dungeon.map,
     entities,
     objects,
@@ -156,11 +161,16 @@ export function evaluateGameOver(s) {
   const aliveHeroes = getAliveHeroes(s);
   const aliveEnemies = getAliveEnemies(s);
 
-  if (aliveEnemies.length === 0) {
-    return 'won';
-  }
   if (aliveHeroes.length === 0) {
     return 'lost';
+  }
+  if (aliveEnemies.length === 0) {
+    const currentFloor = s.floor || 1;
+    const maxFloors = s.maxFloors || CONFIG.MAX_FLOORS || 3;
+    if (currentFloor < maxFloors && s.objects?.['exit_door']) {
+      return null;
+    }
+    return 'won';
   }
   return null;
 }
@@ -188,6 +198,15 @@ export function applyMove(s, id, to, cost) {
     to: { x: to.x, y: to.y },
     cost
   }];
+
+  // Check if character stepped onto an unlocked exit door / stairs
+  const exitDoor = Object.values(next.objects || {}).find(
+    o => (o.type === 'door' || o.id === 'exit_door') && o.position.x === to.x && o.position.y === to.y
+  );
+  if (exitDoor && !exitDoor.locked) {
+    const adv = advanceFloor(next, id);
+    return { state: adv.state, events: [...events, ...adv.events] };
+  }
 
   return { state: next, events };
 }
@@ -220,6 +239,18 @@ export function applyDamage(s, targetId, amount, meta = {}) {
   if (target.hp === 0 && target.alive) {
     target.alive = false;
     events.push({ type: 'death', id: targetId });
+
+    // Unlock exit door if all room enemies are defeated
+    const remainingEnemies = getAliveEnemies(next);
+    if (remainingEnemies.length === 0 && next.objects?.['exit_door'] && next.objects['exit_door'].locked) {
+      next.objects['exit_door'].locked = false;
+      next.objects['exit_door'].blocksMovement = false;
+      events.push({
+        type: 'door_unlocked',
+        id: 'exit_door',
+        message: 'Todos os inimigos da câmara foram derrotados! A passagem para o próximo andar se abriu.'
+      });
+    }
 
     const outcome = evaluateGameOver(next);
     if (outcome) {
@@ -301,6 +332,18 @@ export function applyAbility(s, { caster_id, ability_id, target_id }, resolved =
       if (target.hp === 0 && target.alive) {
         target.alive = false;
         events.push({ type: 'death', id: target_id });
+
+        // Unlock exit door if all room enemies are defeated
+        const remainingEnemies = getAliveEnemies(next);
+        if (remainingEnemies.length === 0 && next.objects?.['exit_door'] && next.objects['exit_door'].locked) {
+          next.objects['exit_door'].locked = false;
+          next.objects['exit_door'].blocksMovement = false;
+          events.push({
+            type: 'door_unlocked',
+            id: 'exit_door',
+            message: 'Todos os inimigos da câmara foram derrotados! A passagem para o próximo andar se abriu.'
+          });
+        }
 
         const outcome = evaluateGameOver(next);
         if (outcome) {
@@ -437,6 +480,22 @@ export function applyInteract(s, { character_id, object_id }, resolved = {}) {
   const events = [];
 
   if (obj) {
+    if (obj.type === 'door' || obj.id === 'exit_door') {
+      obj.opened = true;
+      const adv = advanceFloor(next, character_id);
+      return {
+        state: adv.state,
+        events: [
+          {
+            type: 'door_opened',
+            objectId: object_id,
+            byId: character_id
+          },
+          ...adv.events
+        ]
+      };
+    }
+
     obj.opened = true;
     if (obj.blocksMovement !== undefined) {
       obj.blocksMovement = false;
@@ -465,6 +524,110 @@ export function applyInteract(s, { character_id, object_id }, resolved = {}) {
       loot
     });
   }
+
+  return { state: next, events };
+}
+
+/**
+ * Advances the game to the next dungeon floor.
+ * Preserves alive hero health, gold, items, resets turn and spawns next floor enemies.
+ * @param {object} s GameState
+ * @param {string} [actorId]
+ * @returns {{ state: object, events: object[] }}
+ */
+export function advanceFloor(s, actorId = null) {
+  const next = cloneState(s);
+  const currentFloor = next.floor || 1;
+  const maxFloors = next.maxFloors || CONFIG.MAX_FLOORS || 3;
+
+  if (currentFloor >= maxFloors) {
+    next.status = 'won';
+    next.phase = PHASE.GAME_OVER;
+    next.gameOver = true;
+    return {
+      state: next,
+      events: [{
+        type: 'game_over',
+        status: 'won',
+        result: 'won',
+        message: 'A masmorra foi completamente conquistada com glória!'
+      }]
+    };
+  }
+
+  const nextFloor = currentFloor + 1;
+  next.floor = nextFloor;
+
+  // Generate new dungeon for the next floor
+  const floorDungeon = generateDungeon(next.seed, { floor: nextFloor });
+  next.map = floorDungeon.map;
+
+  // Reposition living heroes at new floor entrance spawns, refresh AP/MP, give +5 HP rest heal
+  for (const hero of HERO_ROSTER) {
+    const heroEntity = next.entities[hero.id];
+    if (heroEntity && heroEntity.alive) {
+      const spawnPos = floorDungeon.spawns.heroes[hero.id] || { x: 2, y: 10 };
+      heroEntity.position = { x: spawnPos.x, y: spawnPos.y };
+      heroEntity.ap = heroEntity.maxAp ?? 1;
+      heroEntity.mp = heroEntity.maxMp ?? 4;
+      heroEntity.hp = Math.min(heroEntity.maxHp, heroEntity.hp + 5);
+    }
+  }
+
+  // Remove old enemies and instantiate new enemies for next floor
+  for (const [entId, ent] of Object.entries(next.entities)) {
+    if (ent.role === 'enemy') {
+      delete next.entities[entId];
+    }
+  }
+
+  const enemySpawns = floorDungeon.spawns.enemies || [];
+  for (let i = 0; i < enemySpawns.length; i++) {
+    const spawn = enemySpawns[i];
+    const classId = spawn.classId || 'goblin';
+    const cls = CLASSES[classId] || CLASSES.goblin;
+    next.entities[spawn.id] = createEntity({
+      id: spawn.id,
+      name: spawn.name || `${cls.label || 'Inimigo'} ${i + 1}`,
+      classId,
+      role: 'enemy',
+      position: { x: spawn.x, y: spawn.y },
+      hp: spawn.maxHp || spawn.hp || cls.maxHp
+    });
+  }
+
+  // Populate new floor objects
+  next.objects = {};
+  const objList = Array.isArray(floorDungeon.objects) ? floorDungeon.objects : Object.values(floorDungeon.objects || {});
+  for (const obj of objList) {
+    next.objects[obj.id] = {
+      ...obj,
+      position: { ...obj.position },
+      loot: obj.loot ? obj.loot.map(l => ({ ...l })) : []
+    };
+  }
+
+  // Reset round and active hero
+  next.round = 1;
+  next.turnIndex = 0;
+  next.phase = PHASE.HERO;
+  const aliveHeroes = getAliveHeroes(next);
+  next.activeId = aliveHeroes[0]?.id || 'hero_warrior';
+
+  const events = [
+    {
+      type: 'floor_transition',
+      floor: nextFloor,
+      maxFloors,
+      actorId,
+      message: `Os heróis desceram para o Andar ${nextFloor}! A atmosfera fica mais densa e novos perigos surgem.`
+    },
+    {
+      type: 'turn_started',
+      round: 1,
+      activeId: next.activeId
+    }
+  ];
 
   return { state: next, events };
 }

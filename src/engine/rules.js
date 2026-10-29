@@ -391,7 +391,7 @@ export function validateInteract(s, { character_id, object_id }, ctx = {}) {
   }
 
   // 6. ALREADY_OPENED
-  if (obj.opened) {
+  if (obj.opened && obj.type !== 'door') {
     return { ok: false, code: 'ALREADY_OPENED', message: REJECT.ALREADY_OPENED() };
   }
 

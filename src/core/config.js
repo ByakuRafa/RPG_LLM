@@ -9,7 +9,8 @@ export const CONFIG = Object.freeze({
   MOVEMENT_MODE: 'BFS',          // 'BFS' | 'MANHATTAN'
   MAX_TOOL_CALLS: 4,
   LOG_MAX_ENTRIES: 300,
-  ENEMY_AI_MODE: 'HEURISTIC'     // 'HEURISTIC' | 'LLM'
+  ENEMY_AI_MODE: 'HEURISTIC',     // 'HEURISTIC' | 'LLM'
+  MAX_FLOORS: 3
 });
 
 export const TILE = Object.freeze({ FLOOR: 0, WALL: 1 });

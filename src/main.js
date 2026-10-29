@@ -348,6 +348,24 @@ export async function boot() {
     checkGameOver(state);
   });
 
+  // Announce door unlocks and floor transitions
+  bus.on('queue:applied', ({ events }) => {
+    if (!events || !Array.isArray(events)) return;
+    for (const ev of events) {
+      if (ev.type === 'door_unlocked') {
+        bus.emit('chat:system', {
+          level: 'info',
+          text: '✨ A câmara foi limpa de inimigos! A porta de pedra se destrancou e a passagem para o próximo andar está aberta.'
+        });
+      } else if (ev.type === 'floor_transition') {
+        bus.emit('chat:system', {
+          level: 'info',
+          text: `🚪 [ANDAR ${ev.floor}] ${ev.message || 'Os heróis avançaram para a próxima câmara da masmorra!'}`
+        });
+      }
+    }
+  });
+
   // 16. Start First Turn & Initial Render
   turns.start();
   const initialState = store.getState();

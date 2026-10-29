@@ -20,6 +20,8 @@ export const DEFAULT_SPRITE_URLS = Object.freeze([
   CLASSES.mage?.tokenUrl,
   CLASSES.rogue?.tokenUrl,
   CLASSES.goblin?.tokenUrl,
+  CLASSES.skeleton?.tokenUrl,
+  CLASSES.orc?.tokenUrl,
   CHEST_TOKENS?.closed,
   CHEST_TOKENS?.opened
 ].filter(Boolean));
@@ -246,6 +248,82 @@ export function createGridRenderer(canvas, bus, { tileSize = TILE_SIZE, getSetti
       if (!obj || !obj.position) continue;
       const px = obj.position.x * tileSize;
       const py = obj.position.y * tileSize;
+
+      if (obj.type === "door" || obj.kind === "door" || obj.type === "stairs") {
+        const isLocked = Boolean(obj.locked);
+        const cx = px + 8;
+        const cy = py + 6;
+        const cw = tileSize - 16;
+        const ch = tileSize - 12;
+
+        ctx.save();
+        if (isLocked) {
+          // Closed medieval archway door
+          ctx.fillStyle = "#334155";
+          ctx.beginPath();
+          ctx.roundRect(cx, cy, cw, ch, [16, 16, 0, 0]);
+          ctx.fill();
+
+          ctx.fillStyle = "#5c3d2e";
+          ctx.beginPath();
+          ctx.roundRect(cx + 4, cy + 4, cw - 8, ch - 4, [12, 12, 0, 0]);
+          ctx.fill();
+
+          ctx.fillStyle = "#1e293b";
+          ctx.fillRect(cx + 4, cy + 18, cw - 8, 4);
+          ctx.fillRect(cx + 4, cy + 34, cw - 8, 4);
+
+          const lockX = cx + cw / 2;
+          const lockY = cy + 26;
+          ctx.strokeStyle = "#ffe082";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(lockX, lockY - 2, 5, Math.PI, 0, false);
+          ctx.stroke();
+
+          ctx.fillStyle = "#ffd54f";
+          ctx.beginPath();
+          ctx.roundRect(lockX - 6, lockY - 2, 12, 10, 2);
+          ctx.fill();
+          ctx.strokeStyle = "#ffb300";
+          ctx.lineWidth = 1;
+          ctx.stroke();
+
+          ctx.fillStyle = "#212121";
+          ctx.beginPath();
+          ctx.arc(lockX, lockY + 2, 1.5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillRect(lockX - 0.75, lockY + 2, 1.5, 3);
+        } else {
+          // Open archway leading down to next floor with steps and golden glow
+          ctx.fillStyle = "#1e293b";
+          ctx.beginPath();
+          ctx.roundRect(cx, cy, cw, ch, [16, 16, 0, 0]);
+          ctx.fill();
+
+          const stairGrad = ctx.createLinearGradient(0, cy + 4, 0, cy + ch);
+          stairGrad.addColorStop(0, "rgba(245, 158, 11, 0.15)");
+          stairGrad.addColorStop(1, "rgba(245, 158, 11, 0.75)");
+          ctx.fillStyle = stairGrad;
+          ctx.beginPath();
+          ctx.roundRect(cx + 4, cy + 4, cw - 8, ch - 4, [12, 12, 0, 0]);
+          ctx.fill();
+
+          ctx.fillStyle = "#475569";
+          for (let s = 0; s < 4; s++) {
+            const stepY = cy + 16 + s * 8;
+            const stepInset = s * 3;
+            ctx.fillRect(cx + 6 + stepInset, stepY, cw - 12 - stepInset * 2, 4);
+          }
+
+          ctx.fillStyle = "#FEF08A";
+          ctx.font = "bold 13px sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText("⬇", cx + cw / 2, cy + 14);
+        }
+        ctx.restore();
+        continue;
+      }
 
       if (obj.type === "chest" || obj.kind === "chest") {
         const isOpened = Boolean(obj.opened || obj.open);

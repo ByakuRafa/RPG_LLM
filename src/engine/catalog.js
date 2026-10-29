@@ -46,7 +46,32 @@ export const CLASSES = {
     maxMp: 3,
     maxAp: 1,
     abilities: ['goblin_strike'],
-    tokenUrl: './assets/tokens/goblin_64.png'
+    tokenUrl: './assets/tokens/goblin_64.png',
+    archetype: 'melee'
+  },
+  skeleton: {
+    classId: 'skeleton',
+    label: 'Esqueleto Arqueiro',
+    initial: 'S',
+    color: '#94A3B8',
+    maxHp: 14,
+    maxMp: 3,
+    maxAp: 1,
+    abilities: ['bone_arrow'],
+    tokenUrl: './assets/tokens/skeleton_64.png',
+    archetype: 'ranged'
+  },
+  orc: {
+    classId: 'orc',
+    label: 'Orc Bruto',
+    initial: 'O',
+    color: '#15803D',
+    maxHp: 24,
+    maxMp: 2,
+    maxAp: 1,
+    abilities: ['heavy_smash'],
+    tokenUrl: './assets/tokens/orc_64.png',
+    archetype: 'melee'
   }
 };
 
@@ -63,7 +88,9 @@ export const ABILITIES = {
   heal_pulse:    { id: 'heal_pulse',    label: 'Pulso de Cura',   apCost: 1, range: 3, target: 'ally',   effect: { type: 'heal',   amount: 8 } },
   backstab:      { id: 'backstab',      label: 'Apunhalar',       apCost: 1, range: 1, target: 'enemy',  effect: { type: 'damage', amount: 8 } },
   lockpick:      { id: 'lockpick',      label: 'Arrombar',        apCost: 1, range: 1, target: 'object', effect: { type: 'unlock' } },
-  goblin_strike: { id: 'goblin_strike', label: 'Golpe Goblin',    apCost: 1, range: 1, target: 'enemy',  effect: { type: 'damage', amount: 3 } }
+  goblin_strike: { id: 'goblin_strike', label: 'Golpe Goblin',    apCost: 1, range: 1, target: 'enemy',  effect: { type: 'damage', amount: 3 } },
+  bone_arrow:    { id: 'bone_arrow',    label: 'Flecha Óssea',    apCost: 1, range: 4, target: 'enemy',  effect: { type: 'damage', amount: 5 } },
+  heavy_smash:   { id: 'heavy_smash',   label: 'Golpe Pesado',    apCost: 1, range: 1, target: 'enemy',  effect: { type: 'damage', amount: 8, push: 1 } }
 };
 
 export const ITEMS = {

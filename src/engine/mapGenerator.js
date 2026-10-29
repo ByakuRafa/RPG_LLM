@@ -19,7 +19,25 @@ export const SPAWNS = Object.freeze({
   ])
 });
 
-function createFallbackLayout() {
+export function getSpawnsForFloor(floor = 1) {
+  if (floor === 2) {
+    return [
+      { id: 'skeleton_1', classId: 'skeleton', name: 'Esqueleto Arqueiro 1', x: 9, y: 2 },
+      { id: 'skeleton_2', classId: 'skeleton', name: 'Esqueleto Arqueiro 2', x: 10, y: 4 },
+      { id: 'orc_1', classId: 'orc', name: 'Orc Bruto', x: 8, y: 6 }
+    ];
+  }
+  if (floor >= 3) {
+    return [
+      { id: 'orc_boss', classId: 'orc', name: 'Chefe Orc', maxHp: 32, x: 9, y: 2 },
+      { id: 'skeleton_1', classId: 'skeleton', name: 'Esqueleto Arqueiro 1', x: 10, y: 4 },
+      { id: 'skeleton_2', classId: 'skeleton', name: 'Esqueleto Arqueiro 2', x: 8, y: 6 }
+    ];
+  }
+  return SPAWNS.enemies;
+}
+
+function createFallbackLayout(floor = 1) {
   const tiles = Array.from({ length: CONFIG.GRID_H }, () => Array(CONFIG.GRID_W).fill(TILE.FLOOR));
   for (let y = 0; y < CONFIG.GRID_H; y++) {
     for (let x = 0; x < CONFIG.GRID_W; x++) {
@@ -52,6 +70,15 @@ function createFallbackLayout() {
         { id: 'health_potion', qty: 1 },
         { id: 'gold_coins', qty: 25 }
       ]
+    },
+    {
+      id: 'exit_door',
+      type: 'door',
+      label: floor >= (CONFIG.MAX_FLOORS || 3) ? 'Portal do Destino' : 'Porta de Saída',
+      position: { x: 5, y: 1 },
+      locked: true,
+      opened: false,
+      blocksMovement: false
     }
   ];
 
@@ -105,10 +132,17 @@ function validateConnectivity(tiles, objects, spawns) {
  *   spawns: typeof SPAWNS
  * }}
  */
-export function generateDungeon(seed = CONFIG.DEFAULT_SEED) {
-  const rng = createRng(seed);
+export function generateDungeon(seed = CONFIG.DEFAULT_SEED, options = {}) {
+  const floor = typeof options === 'number' ? options : (options?.floor || 1);
+  const effectiveSeed = floor > 1 ? `${seed}_FLOOR_${floor}` : seed;
+  const rng = createRng(effectiveSeed);
   let finalTiles = null;
   let finalObjects = null;
+
+  const currentSpawns = {
+    heroes: SPAWNS.heroes,
+    enemies: getSpawnsForFloor(floor)
+  };
 
   for (let attempt = 0; attempt < 50; attempt++) {
     const tiles = Array.from({ length: CONFIG.GRID_H }, () => Array(CONFIG.GRID_W).fill(TILE.FLOOR));
@@ -124,7 +158,7 @@ export function generateDungeon(seed = CONFIG.DEFAULT_SEED) {
 
     // Reserved spawn tiles + radius-1 ring around hero spawns
     const reserved = new Set();
-    for (const hero of Object.values(SPAWNS.heroes)) {
+    for (const hero of Object.values(currentSpawns.heroes)) {
       for (let dy = -1; dy <= 1; dy++) {
         for (let dx = -1; dx <= 1; dx++) {
           const rx = hero.x + dx;
@@ -135,7 +169,7 @@ export function generateDungeon(seed = CONFIG.DEFAULT_SEED) {
         }
       }
     }
-    for (const enemy of SPAWNS.enemies) {
+    for (const enemy of currentSpawns.enemies) {
       reserved.add(key(enemy.x, enemy.y));
     }
 
@@ -204,9 +238,30 @@ export function generateDungeon(seed = CONFIG.DEFAULT_SEED) {
         { id: 'gold_coins', qty: 25 }
       ]
     };
+    reserved.add(key(c2Pos.x, c2Pos.y));
 
-    const objects = [chest1, chest2];
-    if (validateConnectivity(tiles, objects, SPAWNS)) {
+    // Exit door / stairs placed in top area (rows 1..4)
+    const doorCandidates = [];
+    for (let y = 1; y <= 4; y++) {
+      for (let x = 1; x < CONFIG.GRID_W - 1; x++) {
+        if (tiles[y][x] === TILE.FLOOR && !reserved.has(key(x, y))) {
+          doorCandidates.push({ x, y });
+        }
+      }
+    }
+    const doorPos = doorCandidates.length > 0 ? rng.pick(doorCandidates) : { x: 5, y: 1 };
+    const exitDoor = {
+      id: 'exit_door',
+      type: 'door',
+      label: floor >= (CONFIG.MAX_FLOORS || 3) ? 'Portal do Destino' : 'Porta de Saída',
+      position: { x: doorPos.x, y: doorPos.y },
+      locked: true,
+      opened: false,
+      blocksMovement: false
+    };
+
+    const objects = [chest1, chest2, exitDoor];
+    if (validateConnectivity(tiles, objects, currentSpawns)) {
       finalTiles = tiles;
       finalObjects = objects;
       break;
@@ -214,14 +269,14 @@ export function generateDungeon(seed = CONFIG.DEFAULT_SEED) {
   }
 
   if (!finalTiles) {
-    const fallback = createFallbackLayout();
+    const fallback = createFallbackLayout(floor);
     finalTiles = fallback.tiles;
     finalObjects = fallback.objects;
   }
 
   const mapHash = hashString(JSON.stringify(finalTiles) + JSON.stringify(finalObjects));
   const map = {
-    seed,
+    seed: effectiveSeed,
     width: CONFIG.GRID_W,
     height: CONFIG.GRID_H,
     tiles: finalTiles,
@@ -231,13 +286,13 @@ export function generateDungeon(seed = CONFIG.DEFAULT_SEED) {
   return {
     map,
     objects: finalObjects,
-    spawns: SPAWNS
+    spawns: currentSpawns
   };
 }
 
 /**
  * Returns ASCII representation of the map and optional entities/objects.
- * Rows like "#..W.....G.#" (# wall, . floor, C chest, L locked chest, W/M/R/G units).
+ * Rows like "#..W.....G.#" (# wall, . floor, C chest, L locked chest, D locked door, / open door, W/M/R/G units).
  * @param {object} mapOrState
  * @param {object} [state=null]
  * @returns {string[]}
@@ -269,14 +324,18 @@ export function toAscii(mapOrState, state = null) {
         }
       }
 
-      // 2. Objects (chests)
+      // 2. Objects (chests, doors)
       if (!char) {
         const objects = s?.objects || mapOrState?.objects;
         if (objects) {
           const objList = Array.isArray(objects) ? objects : Object.values(objects);
           const obj = objList.find(o => o.position?.x === x && o.position?.y === y);
-          if (obj && obj.type === 'chest') {
-            char = obj.locked ? 'L' : 'C';
+          if (obj) {
+            if (obj.type === 'chest') {
+              char = obj.locked ? 'L' : 'C';
+            } else if (obj.type === 'door') {
+              char = obj.locked ? 'D' : '/';
+            }
           }
         }
       }

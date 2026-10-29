@@ -3,12 +3,14 @@
  * Pure JS logic, Zero DOM, Zero Canvas, Zero Math.random().
  */
 import { CONFIG, TURN_ORDER } from '../core/config.js';
+import { ABILITIES } from './catalog.js';
 import { key, manhattan, computeReachable, computeDistanceField } from './pathfinding.js';
 import { getAliveHeroes, getAliveEnemies } from './gameState.js';
 
 /**
  * Heuristic enemy strategy:
  * Deterministic targeting and pathfinding using computeDistanceField and computeReachable.
+ * Supports both melee (Goblin, Orc) and ranged (Skeleton) combat archetypes.
  */
 export class HeuristicEnemyStrategy {
   /**
@@ -31,8 +33,13 @@ export class HeuristicEnemyStrategy {
       return [];
     }
 
+    // Resolve primary offensive ability & range
+    const attackAbilityId = enemy.abilities?.find(a => ABILITIES[a]?.target === 'enemy') || 'goblin_strike';
+    const attackAbility = ABILITIES[attackAbilityId] || { range: 1 };
+    const attackRange = attackAbility.range ?? 1;
+
     // 2. Target: for each hero, field = computeDistanceField(state, hero.position, { ignoreUnits: true });
-    // read the goblin's distance. Pick min distance; tie -> lowest hp; tie -> TURN_ORDER index.
+    // read the enemy's distance. Pick min distance; tie -> lowest hp; tie -> TURN_ORDER index.
     let targetHero = null;
     let targetField = null;
     let minHeroDist = Infinity;
@@ -66,70 +73,73 @@ export class HeuristicEnemyStrategy {
     const calls = [];
     let currentPos = { x: enemy.position.x, y: enemy.position.y };
 
-    // 3. Already adjacent to any hero -> skip movement.
-    const isAdjacentToAnyHero = heroes.some(h =>
-      manhattan(enemy.position.x, enemy.position.y, h.position.x, h.position.y) === 1
-    );
+    // 3. Movement evaluation
+    if ((enemy.mp ?? 0) > 0 && targetField) {
+      const curManhattanToTarget = targetHero ? manhattan(currentPos.x, currentPos.y, targetHero.position.x, targetHero.position.y) : Infinity;
 
-    // 4. Else reach = computeReachable(state, enemyId, enemy.mp); choose the tile minimizing (field.get(tile), reachCost, y, x).
-    // Emit move_character only if it reduces the distance.
-    if (!isAdjacentToAnyHero && (enemy.mp ?? 0) > 0 && targetField) {
-      const reach = computeReachable(state, enemyId, enemy.mp);
-      let bestCandidate = null;
+      // Melee: already adjacent -> skip movement.
+      // Ranged: in range (2..attackRange) -> skip movement. If adjacent (dist 1), try to kite back.
+      const shouldMove = attackRange === 1
+        ? curManhattanToTarget > 1
+        : curManhattanToTarget > attackRange;
 
-      for (const [tileKey, reachCost] of reach.entries()) {
-        const [tx, ty] = tileKey.split(',').map(Number);
-        const dist = targetField.get(tileKey) ?? Infinity;
-        const candidate = { dist, reachCost, y: ty, x: tx };
+      if (shouldMove) {
+        const reach = computeReachable(state, enemyId, enemy.mp);
+        let bestCandidate = null;
 
-        if (!bestCandidate) {
-          bestCandidate = candidate;
-        } else {
-          let cmp = candidate.dist - bestCandidate.dist;
-          if (cmp === 0) cmp = candidate.reachCost - bestCandidate.reachCost;
-          if (cmp === 0) cmp = candidate.y - bestCandidate.y;
-          if (cmp === 0) cmp = candidate.x - bestCandidate.x;
+        for (const [tileKey, reachCost] of reach.entries()) {
+          const [tx, ty] = tileKey.split(',').map(Number);
+          const dist = targetField.get(tileKey) ?? Infinity;
+          const candidate = { dist, reachCost, y: ty, x: tx };
 
-          if (cmp < 0) {
+          if (!bestCandidate) {
             bestCandidate = candidate;
+          } else {
+            let cmp = candidate.dist - bestCandidate.dist;
+            if (cmp === 0) cmp = candidate.reachCost - bestCandidate.reachCost;
+            if (cmp === 0) cmp = candidate.y - bestCandidate.y;
+            if (cmp === 0) cmp = candidate.x - bestCandidate.x;
+
+            if (cmp < 0) {
+              bestCandidate = candidate;
+            }
           }
         }
-      }
 
-      const currentDist = targetField.get(key(enemy.position.x, enemy.position.y)) ?? Infinity;
-      if (bestCandidate && bestCandidate.dist < currentDist) {
-        calls.push({
-          name: 'move_character',
-          arguments: {
-            character_id: enemyId,
-            target_x: bestCandidate.x,
-            target_y: bestCandidate.y
-          }
-        });
-        currentPos = { x: bestCandidate.x, y: bestCandidate.y };
+        const currentDist = targetField.get(key(enemy.position.x, enemy.position.y)) ?? Infinity;
+        if (bestCandidate && bestCandidate.dist < currentDist) {
+          calls.push({
+            name: 'move_character',
+            arguments: {
+              character_id: enemyId,
+              target_x: bestCandidate.x,
+              target_y: bestCandidate.y
+            }
+          });
+          currentPos = { x: bestCandidate.x, y: bestCandidate.y };
+        }
       }
     }
 
-    // 5. From the (simulated) final position, if adjacent to any hero -> emit use_ability('goblin_strike')
-    // on the adjacent hero with the lowest hp (tie -> TURN_ORDER index).
-    const adjacentHeroes = heroes.filter(h =>
-      manhattan(currentPos.x, currentPos.y, h.position.x, h.position.y) === 1
+    // 4. From the (simulated) final position, find heroes in attack range
+    const inRangeHeroes = heroes.filter(h =>
+      manhattan(currentPos.x, currentPos.y, h.position.x, h.position.y) <= attackRange
     );
 
-    if (adjacentHeroes.length > 0 && (enemy.ap ?? 1) >= 1) {
-      adjacentHeroes.sort((a, b) => {
+    if (inRangeHeroes.length > 0 && (enemy.ap ?? 1) >= 1) {
+      inRangeHeroes.sort((a, b) => {
         if (a.hp !== b.hp) return a.hp - b.hp;
         const idxA = TURN_ORDER.indexOf(a.id);
         const idxB = TURN_ORDER.indexOf(b.id);
         return (idxA === -1 ? 999 : idxA) - (idxB === -1 ? 999 : idxB);
       });
 
-      const attackTarget = adjacentHeroes[0];
+      const attackTarget = inRangeHeroes[0];
       calls.push({
         name: 'use_ability',
         arguments: {
           caster_id: enemyId,
-          ability_id: 'goblin_strike',
+          ability_id: attackAbilityId,
           target_id: attackTarget.id
         }
       });
