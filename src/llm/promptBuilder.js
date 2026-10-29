@@ -57,7 +57,7 @@ Sua resposta DEVE ser estritamente um objeto JSON com duas chaves:
 
 3. use_item:
    - Argumentos: { "character_id": string, "item_id": string, "target_id": string (opcional, padrão = character_id) }
-   - Consome 1 unidade do item do inventário do herói ativo. Não custa AP nem MP.
+   - Consome 1 unidade do item do inventário da equipe (ex: "health_potion" / Poção de Vida). Custa 1 AP. O alvo ("target_id") pode ser o próprio herói ou um aliado no alcance (distância 1).
 
 4. interact_object:
    - Argumentos: { "character_id": string, "object_id": string }
@@ -231,11 +231,17 @@ export function buildStateSnapshot(state, config = 'B') {
     }));
 
   // Inventory (sorted by ID)
-  const inventory = (activeHero?.inventory || [])
+  // Shared party inventory is stored in state.inventory; fallback to activeHero items/inventory if present
+  const rawInventory = (Array.isArray(state?.inventory) && state.inventory.length > 0)
+    ? state.inventory
+    : (activeHero?.inventory || activeHero?.items || []);
+
+  const inventory = rawInventory
     .slice()
     .sort((a, b) => a.id.localeCompare(b.id))
     .map((item) => ({
       id: item.id,
+      name: ITEMS[item.id]?.label || item.id,
       qty: item.qty,
       usable: Boolean(ITEMS[item.id]?.usable)
     }));

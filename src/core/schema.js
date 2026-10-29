@@ -79,6 +79,59 @@ export const RESPONSE_SCHEMA_FIELDS = Object.freeze(new Set([
 ]));
 
 /**
+ * Resolves semantic target names/pronouns to entity IDs.
+ * Examples: "Thorin" -> "hero_warrior", "Lyra" -> "hero_mage", "self" -> casterId.
+ * @param {string} rawTarget
+ * @param {object|null} state
+ * @param {string|null} casterId
+ * @returns {string} resolved ID or original string
+ */
+export function resolveSemanticTarget(rawTarget, state = null, casterId = null) {
+  if (typeof rawTarget !== 'string' || !rawTarget.trim()) return rawTarget;
+  const lower = rawTarget.trim().toLowerCase();
+
+  // 1. Self / caster aliases
+  if (['self', 'mim', 'eu', 'me', 'myself', 'proprio', 'próprio', 'si', 'si_mesmo', 'si_mesma'].includes(lower)) {
+    return casterId || state?.activeId || rawTarget;
+  }
+
+  // 2. Roster hero name / class aliases
+  if (lower === 'thorin' || lower === 'guerreiro' || lower === 'warrior') return 'hero_warrior';
+  if (lower === 'lyra' || lower === 'mago' || lower === 'maga' || lower === 'mage') return 'hero_mage';
+  if (lower === 'vex' || lower === 'ladino' || lower === 'ladina' || lower === 'rogue') return 'hero_rogue';
+
+  // 3. Exact key match in state entities/objects
+  if (state?.entities?.[rawTarget]) return rawTarget;
+  if (state?.objects?.[rawTarget]) return rawTarget;
+
+  // 4. Entity match by name in state
+  if (state?.entities) {
+    const entList = Object.values(state.entities);
+    const byName = entList.find(e => e?.name && e.name.toLowerCase() === lower);
+    if (byName) return byName.id;
+  }
+
+  // 5. Generic enemy name ("goblin", "esqueleto", "orc")
+  if (state?.entities) {
+    const livingEnemies = Object.values(state.entities).filter(e => e && e.role === 'enemy' && e.alive);
+    if (lower === 'goblin') {
+      const g = livingEnemies.find(e => e.id.startsWith('goblin') || e.classId === 'goblin');
+      if (g) return g.id;
+    }
+    if (lower === 'esqueleto' || lower === 'skeleton') {
+      const s = livingEnemies.find(e => e.id.startsWith('skeleton') || e.classId === 'skeleton');
+      if (s) return s.id;
+    }
+    if (lower === 'orc') {
+      const o = livingEnemies.find(e => e.id.startsWith('orc') || e.classId === 'orc');
+      if (o) return o.id;
+    }
+  }
+
+  return rawTarget;
+}
+
+/**
  * Tolerant normalization applied to raw tool batches:
  * - Accepts { tool_calls: [...] } or a bare array of calls.
  * - Trims and lowercases tool names.
@@ -124,6 +177,48 @@ export function normalizeBatch(raw, state = null) {
       callWasCoerced = true;
     } else if (rawName === 'interact' || rawName === 'open' || rawName === 'open_chest') {
       rawName = 'interact_object';
+      callWasCoerced = true;
+    } else if (rawName === 'push' || rawName === 'push_enemy' || rawName === 'shove' || rawName === 'empurrar' || rawName === 'shield_bash' || rawName === 'bash' || rawName === 'golpe_de_escudo' || rawName === 'escudada') {
+      rawName = 'use_ability';
+      if (!rawArgs.ability_id && !rawArgs.ability) {
+        rawArgs.ability_id = 'shield_bash';
+      }
+      callWasCoerced = true;
+    } else if (rawName === 'heal' || rawName === 'heal_pulse' || rawName === 'curar' || rawName === 'cura' || rawName === 'pulso_de_cura') {
+      rawName = 'use_ability';
+      if (!rawArgs.ability_id && !rawArgs.ability) {
+        rawArgs.ability_id = 'heal_pulse';
+      }
+      callWasCoerced = true;
+    } else if (rawName === 'firebolt' || rawName === 'raio_de_fogo') {
+      rawName = 'use_ability';
+      if (!rawArgs.ability_id && !rawArgs.ability) {
+        rawArgs.ability_id = 'firebolt';
+      }
+      callWasCoerced = true;
+    } else if (rawName === 'slash' || rawName === 'cortar' || rawName === 'corte') {
+      rawName = 'use_ability';
+      if (!rawArgs.ability_id && !rawArgs.ability) {
+        rawArgs.ability_id = 'slash';
+      }
+      callWasCoerced = true;
+    } else if (rawName === 'backstab' || rawName === 'apunhalar') {
+      rawName = 'use_ability';
+      if (!rawArgs.ability_id && !rawArgs.ability) {
+        rawArgs.ability_id = 'backstab';
+      }
+      callWasCoerced = true;
+    } else if (rawName === 'lockpick' || rawName === 'arrombar') {
+      rawName = 'use_ability';
+      if (!rawArgs.ability_id && !rawArgs.ability) {
+        rawArgs.ability_id = 'lockpick';
+      }
+      callWasCoerced = true;
+    } else if (rawName === 'potion' || rawName === 'use_potion' || rawName === 'drink_potion' || rawName === 'tomar_pocao' || rawName === 'beber_pocao') {
+      rawName = 'use_item';
+      if (!rawArgs.item_id && !rawArgs.item) {
+        rawArgs.item_id = 'health_potion';
+      }
       callWasCoerced = true;
     }
 
@@ -173,6 +268,35 @@ export function normalizeBatch(raw, state = null) {
         delete normArgs.skill;
         callWasCoerced = true;
       }
+      if (normArgs.ability_id) {
+        const abLower = String(normArgs.ability_id).trim().toLowerCase();
+        if (['push', 'shove', 'empurrar', 'bash', 'escudo', 'escudada', 'golpe_de_escudo'].includes(abLower)) {
+          if (normArgs.ability_id !== 'shield_bash') {
+            normArgs.ability_id = 'shield_bash';
+            callWasCoerced = true;
+          }
+        } else if (['heal', 'cura', 'curar', 'pulso_de_cura', 'pulso'].includes(abLower)) {
+          if (normArgs.ability_id !== 'heal_pulse') {
+            normArgs.ability_id = 'heal_pulse';
+            callWasCoerced = true;
+          }
+        } else if (['fogo', 'raio', 'raio_de_fogo', 'fire'].includes(abLower)) {
+          if (normArgs.ability_id !== 'firebolt') {
+            normArgs.ability_id = 'firebolt';
+            callWasCoerced = true;
+          }
+        } else if (['corte', 'cortar', 'espada'].includes(abLower)) {
+          if (normArgs.ability_id !== 'slash') {
+            normArgs.ability_id = 'slash';
+            callWasCoerced = true;
+          }
+        } else if (['lock', 'arrombamento', 'arrombar'].includes(abLower)) {
+          if (normArgs.ability_id !== 'lockpick') {
+            normArgs.ability_id = 'lockpick';
+            callWasCoerced = true;
+          }
+        }
+      }
       if (!normArgs.ability_id && state?.activeId) {
         const activeHero = state.entities?.[state.activeId];
         if (activeHero?.abilities?.length > 0) {
@@ -193,6 +317,15 @@ export function normalizeBatch(raw, state = null) {
         callWasCoerced = true;
       }
 
+      // Semantic resolution for target_id
+      if (normArgs.target_id) {
+        const resolved = resolveSemanticTarget(normArgs.target_id, state, normArgs.caster_id);
+        if (resolved && resolved !== normArgs.target_id) {
+          normArgs.target_id = resolved;
+          callWasCoerced = true;
+        }
+      }
+
       // If target_id missing but target_x & target_y present, resolve from state
       if (!normArgs.target_id && state && typeof normArgs.target_x === 'number' && typeof normArgs.target_y === 'number') {
         const entAtPos = Object.values(state.entities || {}).find(e => e && e.alive && e.position?.x === normArgs.target_x && e.position?.y === normArgs.target_y);
@@ -208,16 +341,41 @@ export function normalizeBatch(raw, state = null) {
         }
       }
 
-      // If target_id still missing and there is an adjacent living enemy to the caster:
+      // If target_id still missing, resolve contextually based on ability type:
       if (!normArgs.target_id && state && normArgs.caster_id) {
         const caster = state.entities?.[normArgs.caster_id];
         if (caster && caster.position) {
-          const enemies = Object.values(state.entities || {}).filter(e => e && e.role === 'enemy' && e.alive && e.position);
-          const adj = enemies.filter(e => Math.abs(e.position.x - caster.position.x) + Math.abs(e.position.y - caster.position.y) === 1);
-          if (adj.length > 0) {
-            adj.sort((a, b) => a.hp - b.hp);
-            normArgs.target_id = adj[0].id;
-            callWasCoerced = true;
+          const isHeal = normArgs.ability_id === 'heal_pulse';
+          if (isHeal) {
+            // Heal priority:
+            // 1. If caster is damaged, self-heal
+            if (typeof caster.hp === 'number' && typeof caster.maxHp === 'number' && caster.hp < caster.maxHp) {
+              normArgs.target_id = caster.id;
+              callWasCoerced = true;
+            } else {
+              // 2. Look for living damaged allies in range 3
+              const allies = Object.values(state.entities || {}).filter(e => e && e.role === 'player' && e.alive && e.position);
+              const inRangeAllies = allies.filter(e => Math.abs(e.position.x - caster.position.x) + Math.abs(e.position.y - caster.position.y) <= 3);
+              const damagedAllies = inRangeAllies.filter(e => typeof e.hp === 'number' && typeof e.maxHp === 'number' && e.hp < e.maxHp);
+              damagedAllies.sort((a, b) => a.hp - b.hp);
+
+              if (damagedAllies.length > 0) {
+                normArgs.target_id = damagedAllies[0].id;
+                callWasCoerced = true;
+              } else {
+                normArgs.target_id = caster.id;
+                callWasCoerced = true;
+              }
+            }
+          } else {
+            // Hostile ability: find adjacent living enemy
+            const enemies = Object.values(state.entities || {}).filter(e => e && e.role === 'enemy' && e.alive && e.position);
+            const adj = enemies.filter(e => Math.abs(e.position.x - caster.position.x) + Math.abs(e.position.y - caster.position.y) === 1);
+            if (adj.length > 0) {
+              adj.sort((a, b) => a.hp - b.hp);
+              normArgs.target_id = adj[0].id;
+              callWasCoerced = true;
+            }
           }
         }
       }
@@ -269,11 +427,40 @@ export function normalizeBatch(raw, state = null) {
           delete normArgs.item;
           callWasCoerced = true;
         }
+        // Normalize item_id aliases
+        if (normArgs.item_id) {
+          const itemLower = String(normArgs.item_id).trim().toLowerCase();
+          if (['potion', 'pocao', 'pocao_de_cura', 'pocao_cura', 'cura', 'health_potion', 'vida'].includes(itemLower)) {
+            if (normArgs.item_id !== 'health_potion') {
+              normArgs.item_id = 'health_potion';
+              callWasCoerced = true;
+            }
+          } else if (['gold', 'coins', 'moedas', 'ouro', 'moedas_de_ouro'].includes(itemLower)) {
+            if (normArgs.item_id !== 'gold_coins') {
+              normArgs.item_id = 'gold_coins';
+              callWasCoerced = true;
+            }
+          }
+        } else {
+          normArgs.item_id = 'health_potion';
+          callWasCoerced = true;
+        }
+
         if (!normArgs.target_id && normArgs.target) {
           normArgs.target_id = normArgs.target;
           delete normArgs.target;
           callWasCoerced = true;
         }
+
+        // Semantic resolution for target_id
+        if (normArgs.target_id) {
+          const resolved = resolveSemanticTarget(normArgs.target_id, state, normArgs.character_id);
+          if (resolved && resolved !== normArgs.target_id) {
+            normArgs.target_id = resolved;
+            callWasCoerced = true;
+          }
+        }
+
         if ((normArgs.target_id === undefined || normArgs.target_id === null || normArgs.target_id === '') && normArgs.character_id) {
           normArgs.target_id = normArgs.character_id;
         }

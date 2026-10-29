@@ -14,11 +14,13 @@ export const KINDS = {
 export const SPAWNABLE_KINDS = Object.keys(KINDS).filter((k) => k !== 'player');
 
 export const ITEMS = {
-  potion: { name: 'Poção de Cura' },
-  gold:   { name: 'Moedas de Ouro' },
-  dagger: { name: 'Adaga Enferrujada' },
-  key:    { name: 'Chave de Ferro' },
-  bone:   { name: 'Osso Velho' },
+  health_potion: { name: 'Poção de Vida' },
+  gold_coins:    { name: 'Moedas de Ouro' },
+  potion:        { name: 'Poção de Cura' },
+  gold:          { name: 'Moedas de Ouro' },
+  dagger:        { name: 'Adaga Enferrujada' },
+  key:           { name: 'Chave de Ferro' },
+  bone:          { name: 'Osso Velho' },
 };
 
 export function normalizeItem(item) {

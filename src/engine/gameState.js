@@ -6,6 +6,7 @@ import { CONFIG, PHASE } from '../core/config.js';
 import { hashString } from '../core/prng.js';
 import { CLASSES, ABILITIES, ITEMS, HERO_ROSTER } from './catalog.js';
 import { generateDungeon } from './mapGenerator.js';
+import { inBounds, isWallAt, getBlockerAt } from './pathfinding.js';
 
 /**
  * Creates an entity by merging spec with class definitions.
@@ -123,6 +124,7 @@ export function cloneState(s) {
 export function stateHash(s) {
   return hashString(JSON.stringify(s));
 }
+export const hashState = stateHash;
 
 // Pure Selectors
 export function getEntity(s, id) {
@@ -315,14 +317,19 @@ export function applyAbility(s, { caster_id, ability_id, target_id }, resolved =
   const effect = ability?.effect || {};
 
   if (effect.type === 'damage') {
-    const target = next.entities?.[target_id];
+    let target = next.entities?.[target_id];
+    if (!target && next.entities && typeof target_id === 'string') {
+      const lower = target_id.toLowerCase();
+      target = Object.values(next.entities).find(e => e?.name && e.name.toLowerCase() === lower);
+    }
     if (target) {
+      const actualTargetId = target.id;
       const dmg = Math.max(0, effect.amount ?? 0);
       target.hp = Math.max(0, target.hp - dmg);
 
       events.push({
         type: 'damage',
-        id: target_id,
+        id: actualTargetId,
         sourceId: caster_id,
         abilityId: ability_id,
         amount: dmg,
@@ -331,7 +338,7 @@ export function applyAbility(s, { caster_id, ability_id, target_id }, resolved =
 
       if (target.hp === 0 && target.alive) {
         target.alive = false;
-        events.push({ type: 'death', id: target_id });
+        events.push({ type: 'death', id: actualTargetId });
 
         // Unlock exit door if all room enemies are defeated
         const remainingEnemies = getAliveEnemies(next);
@@ -356,27 +363,53 @@ export function applyAbility(s, { caster_id, ability_id, target_id }, resolved =
 
       // Push handling
       if (effect.push) {
-        if (resolved.pushTo) {
+        let pushTo = resolved.pushTo;
+        let pushBlockedReason = resolved.pushBlockedReason;
+
+        // Fallback calculation if not pre-resolved
+        if (!pushTo && !pushBlockedReason && caster && target) {
+          const dx = Math.sign(target.position.x - caster.position.x);
+          const dy = Math.sign(target.position.y - caster.position.y);
+          const destX = target.position.x + dx;
+          const destY = target.position.y + dy;
+
+          if (!inBounds(next.map, destX, destY)) {
+            pushBlockedReason = 'edge';
+          } else if (isWallAt(next.map, destX, destY)) {
+            pushBlockedReason = 'wall';
+          } else if (getBlockerAt(next, destX, destY, { ignoreId: target.id })) {
+            pushBlockedReason = 'occupied';
+          } else {
+            pushTo = { x: destX, y: destY };
+          }
+        }
+
+        if (pushTo) {
           const fromPos = { ...target.position };
-          target.position = { x: resolved.pushTo.x, y: resolved.pushTo.y };
+          target.position = { x: pushTo.x, y: pushTo.y };
           events.push({
             type: 'push',
-            id: target_id,
+            id: actualTargetId,
             from: fromPos,
             to: { x: target.position.x, y: target.position.y }
           });
-        } else if (resolved.pushBlockedReason) {
+        } else if (pushBlockedReason) {
           events.push({
             type: 'push_blocked',
-            id: target_id,
-            reason: resolved.pushBlockedReason
+            id: actualTargetId,
+            reason: pushBlockedReason
           });
         }
       }
     }
   } else if (effect.type === 'heal') {
-    const target = next.entities?.[target_id];
+    let target = next.entities?.[target_id];
+    if (!target && next.entities && typeof target_id === 'string') {
+      const lower = target_id.toLowerCase();
+      target = Object.values(next.entities).find(e => e?.name && e.name.toLowerCase() === lower);
+    }
     if (target) {
+      const actualTargetId = target.id;
       const healAmt = Math.max(0, effect.amount ?? 0);
       const oldHp = target.hp;
       target.hp = Math.min(target.maxHp, target.hp + healAmt);
@@ -384,7 +417,7 @@ export function applyAbility(s, { caster_id, ability_id, target_id }, resolved =
 
       events.push({
         type: 'heal',
-        id: target_id,
+        id: actualTargetId,
         sourceId: caster_id,
         via: ability_id,
         amount: effective,
@@ -415,10 +448,15 @@ export function applyAbility(s, { caster_id, ability_id, target_id }, resolved =
  */
 export function applyUseItem(s, { character_id, item_id, target_id }, resolved = {}) {
   const next = cloneState(s);
+  const effectiveItemId = (item_id === 'potion' || item_id === 'pocao') ? 'health_potion' : item_id;
   const targetId = target_id || character_id;
   const actor = next.entities?.[character_id];
-  const target = next.entities?.[targetId];
-  const item = resolved.item || ITEMS[item_id];
+  let target = next.entities?.[targetId];
+  if (!target && next.entities && typeof targetId === 'string') {
+    const lower = targetId.toLowerCase();
+    target = Object.values(next.entities).find(e => e?.name && e.name.toLowerCase() === lower);
+  }
+  const item = resolved.item || ITEMS[item_id] || ITEMS[effectiveItemId];
 
   if (actor) {
     actor.ap = Math.max(0, actor.ap - 1);
@@ -426,7 +464,7 @@ export function applyUseItem(s, { character_id, item_id, target_id }, resolved =
 
   // Decrement stack in inventory
   if (Array.isArray(next.inventory)) {
-    const idx = next.inventory.findIndex(it => it.id === item_id);
+    const idx = next.inventory.findIndex(it => it.id === item_id || it.id === effectiveItemId);
     if (idx !== -1) {
       next.inventory[idx].qty -= 1;
       if (next.inventory[idx].qty <= 0) {
@@ -435,11 +473,12 @@ export function applyUseItem(s, { character_id, item_id, target_id }, resolved =
     }
   }
 
+  const actualTargetId = target ? target.id : targetId;
   const events = [{
     type: 'item_used',
-    itemId: item_id,
+    itemId: effectiveItemId,
     byId: character_id,
-    targetId
+    targetId: actualTargetId
   }];
 
   if (item?.effect?.type === 'heal' && target) {
