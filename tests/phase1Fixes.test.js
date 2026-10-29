@@ -155,4 +155,99 @@ describe('Fase 1: Correções de Poções, Cura e Empurrão', () => {
     assertEqual(res.kind, 'entity');
     assertEqual(res.ref.id, 'hero_warrior');
   });
+
+  it('Suporta acentos e variações ("empurrão", "poção de cura", "próprio", "golpe de escudo")', () => {
+    const s = makeTestState(['######', '#WG..#', '######']);
+    s.activeId = 'hero_warrior';
+    s.inventory = [{ id: 'health_potion', qty: 3 }];
+    s.entities.hero_warrior.hp = 10;
+    s.entities.hero_warrior.maxHp = 30;
+
+    // Teste 1: Tool "empurrão" com acento
+    const batchPush = {
+      tool_calls: [{ name: 'empurrão', arguments: { target: 'goblin_1' } }]
+    };
+    const normPush = normalizeBatch(batchPush, s);
+    assertEqual(normPush.tool_calls[0].name, 'use_ability');
+    assertEqual(normPush.tool_calls[0].arguments.ability_id, 'shield_bash');
+
+    // Teste 2: Tool "poção de cura" com acento e alvo "próprio"
+    const batchPot = {
+      tool_calls: [{ name: 'poção de cura', arguments: { target: 'próprio' } }]
+    };
+    const normPot = normalizeBatch(batchPot, s);
+    assertEqual(normPot.tool_calls[0].name, 'use_item');
+    assertEqual(normPot.tool_calls[0].arguments.item_id, 'health_potion');
+    assertEqual(normPot.tool_calls[0].arguments.target_id, 'hero_warrior');
+
+    // Teste 3: use_ability com "golpe de escudo"
+    const batchAbility = {
+      tool_calls: [{ name: 'use_ability', arguments: { ability_id: 'golpe de escudo', target_id: 'goblin_1' } }]
+    };
+    const normAbility = normalizeBatch(batchAbility, s);
+    assertEqual(normAbility.tool_calls[0].arguments.ability_id, 'shield_bash');
+  });
+
+  it('Default de target_id para use_item e heal_pulse quando omitido', () => {
+    const s = makeTestState(['#####', '#W.M#', '#####']);
+    s.activeId = 'hero_warrior';
+    s.inventory = [{ id: 'health_potion', qty: 1 }];
+
+    // use_item sem target_id deve mirar no próprio character_id
+    const rawItem = {
+      tool_calls: [{ name: 'use_item', arguments: { character_id: 'hero_warrior', item_id: 'health_potion' } }]
+    };
+    const normItem = normalizeBatch(rawItem, s);
+    assertEqual(normItem.tool_calls[0].arguments.target_id, 'hero_warrior');
+
+    // validateUseAbility direto sem target_id para heal_pulse deve usar o conjurador como alvo
+    s.activeId = 'hero_mage';
+    const valHeal = validateUseAbility(s, {
+      caster_id: 'hero_mage',
+      ability_id: 'heal_pulse'
+    });
+    assertEqual(valHeal.ok, true);
+    assertEqual(valHeal.resolved.target.id, 'hero_mage');
+  });
+
+  it('Detecta bloqueio de empurrão contra parede e contra outro ocupante', () => {
+    // 1. Empurrão contra parede: Guerreiro em (1,1), Goblin em (2,1), Parede em (3,1)
+    const sWall = makeTestState(['#####', '#WG##', '#####']);
+    const valWall = validateUseAbility(sWall, {
+      caster_id: 'hero_warrior',
+      ability_id: 'shield_bash',
+      target_id: 'goblin_1'
+    });
+    assertEqual(valWall.ok, true);
+    assertEqual(valWall.resolved.pushTo, null);
+    assertEqual(valWall.resolved.pushBlockedReason, 'wall');
+
+    const resWall = applyAbility(sWall, {
+      caster_id: 'hero_warrior',
+      ability_id: 'shield_bash',
+      target_id: 'goblin_1'
+    }, valWall.resolved);
+    // Goblin permanece na mesma posição
+    assertEqual(resWall.state.entities.goblin_1.position.x, 2);
+    assert(resWall.events.some(e => e.type === 'push_blocked' && e.reason === 'wall'));
+
+    // 2. Empurrão contra ocupante: Guerreiro em (1,1), Goblin 1 em (2,1), Goblin 2 em (3,1)
+    const sOcc = makeTestState(['######', '#WGG.#', '######']);
+    const valOcc = validateUseAbility(sOcc, {
+      caster_id: 'hero_warrior',
+      ability_id: 'shield_bash',
+      target_id: 'goblin_1'
+    });
+    assertEqual(valOcc.ok, true);
+    assertEqual(valOcc.resolved.pushTo, null);
+    assertEqual(valOcc.resolved.pushBlockedReason, 'occupied');
+
+    const resOcc = applyAbility(sOcc, {
+      caster_id: 'hero_warrior',
+      ability_id: 'shield_bash',
+      target_id: 'goblin_1'
+    }, valOcc.resolved);
+    assertEqual(resOcc.state.entities.goblin_1.position.x, 2);
+    assert(resOcc.events.some(e => e.type === 'push_blocked' && e.reason === 'occupied'));
+  });
 });

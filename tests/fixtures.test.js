@@ -140,11 +140,21 @@ describe('Sprint 4 Step 10: Benchmark Snapshots & Position Validation', () => {
   });
 });
 
+async function loadTestSuite() {
+  if (typeof window !== 'undefined') {
+    const res = await fetch('/tests/testSuite.json');
+    return res.json();
+  } else {
+    const fs = await import('node:fs/promises');
+    const path = await import('node:path');
+    const file = await fs.readFile(path.resolve('./tests/testSuite.json'), 'utf-8');
+    return JSON.parse(file);
+  }
+}
+
 describe('Sprint 4 Step 10: 30-Case Benchmark Dataset (tests/testSuite.json)', () => {
   it('loads testSuite.json and validates version, seed, and case distribution', async () => {
-    const res = await fetch('/tests/testSuite.json');
-    expect(res.ok).toBe(true);
-    const suite = await res.json();
+    const suite = await loadTestSuite();
 
     expect(suite.version).toBe(1);
     expect(suite.seed).toBe('IA2_DUNGEON_01');
@@ -165,8 +175,7 @@ describe('Sprint 4 Step 10: 30-Case Benchmark Dataset (tests/testSuite.json)', (
   });
 
   it('validates that every illegal case specifies should_refuse: true and empty tool sequence', async () => {
-    const res = await fetch('/tests/testSuite.json');
-    const suite = await res.json();
+    const suite = await loadTestSuite();
     const illegalCases = suite.cases.filter(c => c.category === 'illegal');
 
     expect(illegalCases.length).toBe(10);
@@ -180,8 +189,7 @@ describe('Sprint 4 Step 10: 30-Case Benchmark Dataset (tests/testSuite.json)', (
   });
 
   it('validates that an oracle fake LLM satisfies 100% of direct and ambiguous cases', async () => {
-    const res = await fetch('/tests/testSuite.json');
-    const suite = await res.json();
+    const suite = await loadTestSuite();
     const legalCases = suite.cases.filter(c => c.category !== 'illegal');
 
     expect(legalCases.length).toBe(20);

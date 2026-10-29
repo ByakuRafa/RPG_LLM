@@ -4,6 +4,7 @@
  */
 import { CONFIG, PHASE } from '../core/config.js';
 import { hashString } from '../core/prng.js';
+import { toSlug } from '../core/schema.js';
 import { CLASSES, ABILITIES, ITEMS, HERO_ROSTER } from './catalog.js';
 import { generateDungeon } from './mapGenerator.js';
 import { inBounds, isWallAt, getBlockerAt } from './pathfinding.js';
@@ -319,8 +320,11 @@ export function applyAbility(s, { caster_id, ability_id, target_id }, resolved =
   if (effect.type === 'damage') {
     let target = next.entities?.[target_id];
     if (!target && next.entities && typeof target_id === 'string') {
-      const lower = target_id.toLowerCase();
-      target = Object.values(next.entities).find(e => e?.name && e.name.toLowerCase() === lower);
+      const slug = toSlug(target_id);
+      if (['thorin', 'guerreiro', 'warrior'].includes(slug)) target = next.entities.hero_warrior;
+      else if (['lyra', 'mago', 'maga', 'mage'].includes(slug)) target = next.entities.hero_mage;
+      else if (['vex', 'ladino', 'ladina', 'rogue'].includes(slug)) target = next.entities.hero_rogue;
+      else target = Object.values(next.entities).find(e => e && (toSlug(e.name) === slug || toSlug(e.id) === slug));
     }
     if (target) {
       const actualTargetId = target.id;
@@ -405,8 +409,11 @@ export function applyAbility(s, { caster_id, ability_id, target_id }, resolved =
   } else if (effect.type === 'heal') {
     let target = next.entities?.[target_id];
     if (!target && next.entities && typeof target_id === 'string') {
-      const lower = target_id.toLowerCase();
-      target = Object.values(next.entities).find(e => e?.name && e.name.toLowerCase() === lower);
+      const slug = toSlug(target_id);
+      if (['thorin', 'guerreiro', 'warrior'].includes(slug)) target = next.entities.hero_warrior;
+      else if (['lyra', 'mago', 'maga', 'mage'].includes(slug)) target = next.entities.hero_mage;
+      else if (['vex', 'ladino', 'ladina', 'rogue'].includes(slug)) target = next.entities.hero_rogue;
+      else target = Object.values(next.entities).find(e => e && (toSlug(e.name) === slug || toSlug(e.id) === slug));
     }
     if (target) {
       const actualTargetId = target.id;
@@ -448,13 +455,17 @@ export function applyAbility(s, { caster_id, ability_id, target_id }, resolved =
  */
 export function applyUseItem(s, { character_id, item_id, target_id }, resolved = {}) {
   const next = cloneState(s);
-  const effectiveItemId = (item_id === 'potion' || item_id === 'pocao') ? 'health_potion' : item_id;
+  const itemSlug = toSlug(item_id || '');
+  const effectiveItemId = (['potion', 'pocao', 'pocao_de_cura', 'pocao_cura', 'pocao_de_vida', 'cura'].includes(itemSlug)) ? 'health_potion' : item_id;
   const targetId = target_id || character_id;
   const actor = next.entities?.[character_id];
   let target = next.entities?.[targetId];
   if (!target && next.entities && typeof targetId === 'string') {
-    const lower = targetId.toLowerCase();
-    target = Object.values(next.entities).find(e => e?.name && e.name.toLowerCase() === lower);
+    const slug = toSlug(targetId);
+    if (['thorin', 'guerreiro', 'warrior'].includes(slug)) target = next.entities.hero_warrior;
+    else if (['lyra', 'mago', 'maga', 'mage'].includes(slug)) target = next.entities.hero_mage;
+    else if (['vex', 'ladino', 'ladina', 'rogue'].includes(slug)) target = next.entities.hero_rogue;
+    else target = Object.values(next.entities).find(e => e && (toSlug(e.name) === slug || toSlug(e.id) === slug));
   }
   const item = resolved.item || ITEMS[item_id] || ITEMS[effectiveItemId];
 
@@ -464,7 +475,7 @@ export function applyUseItem(s, { character_id, item_id, target_id }, resolved =
 
   // Decrement stack in inventory
   if (Array.isArray(next.inventory)) {
-    const idx = next.inventory.findIndex(it => it.id === item_id || it.id === effectiveItemId);
+    const idx = next.inventory.findIndex(it => it.id === item_id || it.id === effectiveItemId || toSlug(it.id) === itemSlug);
     if (idx !== -1) {
       next.inventory[idx].qty -= 1;
       if (next.inventory[idx].qty <= 0) {
@@ -489,7 +500,7 @@ export function applyUseItem(s, { character_id, item_id, target_id }, resolved =
 
     events.push({
       type: 'heal',
-      id: targetId,
+      id: actualTargetId,
       sourceId: character_id,
       via: item_id,
       amount: effective,

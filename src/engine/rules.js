@@ -4,6 +4,7 @@
  */
 import { CONFIG, PHASE } from '../core/config.js';
 import { REJECT } from '../core/messages.js';
+import { toSlug } from '../core/schema.js';
 import { inBounds, isWallAt, getBlockerAt, manhattan, computeReachable, key } from './pathfinding.js';
 import { ABILITIES, ITEMS, isHostile } from './catalog.js';
 
@@ -24,6 +25,7 @@ export function isAdjacent(posA, posB) {
 
 /**
  * Resolves an ID to either an entity or an object.
+ * Supports exact IDs, character names, class aliases, and self pronouns.
  * @param {object} s GameState
  * @param {string} id
  * @returns {{ kind: 'entity' | 'object', ref: object } | null}
@@ -36,17 +38,32 @@ export function resolveTarget(s, id) {
   if (s.objects && s.objects[id]) {
     return { kind: 'object', ref: s.objects[id] };
   }
-  // Fallback by entity name (case-insensitive)
-  if (s.entities && typeof id === 'string') {
-    const lower = id.toLowerCase();
-    const byName = Object.values(s.entities).find(e => e?.name && e.name.toLowerCase() === lower);
-    if (byName) return { kind: 'entity', ref: byName };
-  }
-  // Fallback by object name or label
-  if (s.objects && typeof id === 'string') {
-    const lower = id.toLowerCase();
-    const byObj = Object.values(s.objects).find(o => (o?.label && o.label.toLowerCase() === lower) || (o?.name && o.name.toLowerCase() === lower));
-    if (byObj) return { kind: 'object', ref: byObj };
+  if (typeof id === 'string') {
+    const slug = toSlug(id);
+    if (['thorin', 'guerreiro', 'warrior'].includes(slug) && s.entities?.hero_warrior) {
+      return { kind: 'entity', ref: s.entities.hero_warrior };
+    }
+    if (['lyra', 'mago', 'maga', 'mage'].includes(slug) && s.entities?.hero_mage) {
+      return { kind: 'entity', ref: s.entities.hero_mage };
+    }
+    if (['vex', 'ladino', 'ladina', 'rogue'].includes(slug) && s.entities?.hero_rogue) {
+      return { kind: 'entity', ref: s.entities.hero_rogue };
+    }
+    if (['self', 'mim', 'eu', 'me', 'proprio', 'propria'].includes(slug) && s.activeId && s.entities?.[s.activeId]) {
+      return { kind: 'entity', ref: s.entities[s.activeId] };
+    }
+    // Fallback by entity name or id
+    if (s.entities) {
+      const byName = Object.values(s.entities).find(e => e && (toSlug(e.name) === slug || toSlug(e.id) === slug));
+      if (byName) return { kind: 'entity', ref: byName };
+    }
+    // Fallback by object label, name or id
+    if (s.objects) {
+      const byObj = Object.values(s.objects).find(o => 
+        o && (toSlug(o.label) === slug || toSlug(o.name) === slug || toSlug(o.id) === slug)
+      );
+      if (byObj) return { kind: 'object', ref: byObj };
+    }
   }
   return null;
 }
@@ -219,7 +236,8 @@ export function validateUseAbility(s, { caster_id, ability_id, target_id }, ctx 
   }
 
   // 4. Resolve target
-  const resolvedTarget = resolveTarget(s, target_id);
+  const effectiveTargetId = target_id || ((ability.target === 'ally' || ability.target === 'self') ? caster_id : null);
+  const resolvedTarget = resolveTarget(s, effectiveTargetId);
   if (!resolvedTarget) {
     return { ok: false, code: 'UNKNOWN_TARGET', message: REJECT.UNKNOWN_TARGET({ targetId: target_id }) };
   }
@@ -314,14 +332,15 @@ export function validateUseItem(s, { character_id, item_id, target_id }, ctx = {
   const actor = s.entities[character_id];
 
   // 2. UNKNOWN_ITEM (with potion alias support)
-  const effectiveItemId = (item_id === 'potion' || item_id === 'pocao') ? 'health_potion' : item_id;
+  const itemSlug = toSlug(item_id || '');
+  const effectiveItemId = (['potion', 'pocao', 'pocao_de_cura', 'pocao_cura', 'pocao_de_vida', 'cura'].includes(itemSlug)) ? 'health_potion' : item_id;
   const item = ITEMS[item_id] || ITEMS[effectiveItemId];
   if (!item) {
     return { ok: false, code: 'UNKNOWN_ITEM', message: REJECT.UNKNOWN_ITEM({ itemId: item_id }) };
   }
 
   // 3. ITEM_NOT_IN_INVENTORY
-  const invSlot = (s.inventory || []).find(it => it.id === item_id || it.id === effectiveItemId);
+  const invSlot = (s.inventory || []).find(it => it.id === item_id || it.id === effectiveItemId || toSlug(it.id) === itemSlug);
   if (!invSlot || invSlot.qty < 1) {
     return { ok: false, code: 'ITEM_NOT_IN_INVENTORY', message: REJECT.ITEM_NOT_IN_INVENTORY({ itemId: item_id }) };
   }
@@ -338,11 +357,8 @@ export function validateUseItem(s, { character_id, item_id, target_id }, ctx = {
 
   // 6. Target must be a living ally
   const targetId = target_id || character_id;
-  let target = s?.entities?.[targetId];
-  if (!target && s?.entities && typeof targetId === 'string') {
-    const lower = targetId.toLowerCase();
-    target = Object.values(s.entities).find(e => e?.name && e.name.toLowerCase() === lower);
-  }
+  const resolvedTarget = resolveTarget(s, targetId);
+  const target = (resolvedTarget?.kind === 'entity') ? resolvedTarget.ref : s?.entities?.[targetId];
   if (!target) {
     return { ok: false, code: 'UNKNOWN_TARGET', message: REJECT.UNKNOWN_TARGET({ targetId }) };
   }

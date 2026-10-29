@@ -79,6 +79,26 @@ export const RESPONSE_SCHEMA_FIELDS = Object.freeze(new Set([
 ]));
 
 /**
+ * Strips accents, lowercases and trims a string.
+ * @param {string} str
+ * @returns {string}
+ */
+export function stripAccents(str) {
+  if (typeof str !== 'string') return '';
+  return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+}
+
+/**
+ * Normalizes string by stripping accents and replacing spaces/hyphens with underscores.
+ * @param {string} str
+ * @returns {string}
+ */
+export function toSlug(str) {
+  if (typeof str !== 'string') return '';
+  return stripAccents(str).replace(/[\s-]+/g, '_');
+}
+
+/**
  * Resolves semantic target names/pronouns to entity IDs.
  * Examples: "Thorin" -> "hero_warrior", "Lyra" -> "hero_mage", "self" -> casterId.
  * @param {string} rawTarget
@@ -88,41 +108,48 @@ export const RESPONSE_SCHEMA_FIELDS = Object.freeze(new Set([
  */
 export function resolveSemanticTarget(rawTarget, state = null, casterId = null) {
   if (typeof rawTarget !== 'string' || !rawTarget.trim()) return rawTarget;
-  const lower = rawTarget.trim().toLowerCase();
+  const slug = toSlug(rawTarget);
 
   // 1. Self / caster aliases
-  if (['self', 'mim', 'eu', 'me', 'myself', 'proprio', 'próprio', 'si', 'si_mesmo', 'si_mesma'].includes(lower)) {
+  if (['self', 'mim', 'eu', 'me', 'myself', 'proprio', 'propria', 'si', 'si_mesmo', 'si_mesma'].includes(slug)) {
     return casterId || state?.activeId || rawTarget;
   }
 
   // 2. Roster hero name / class aliases
-  if (lower === 'thorin' || lower === 'guerreiro' || lower === 'warrior') return 'hero_warrior';
-  if (lower === 'lyra' || lower === 'mago' || lower === 'maga' || lower === 'mage') return 'hero_mage';
-  if (lower === 'vex' || lower === 'ladino' || lower === 'ladina' || lower === 'rogue') return 'hero_rogue';
+  if (['thorin', 'guerreiro', 'warrior'].includes(slug)) return 'hero_warrior';
+  if (['lyra', 'mago', 'maga', 'mage'].includes(slug)) return 'hero_mage';
+  if (['vex', 'ladino', 'ladina', 'rogue'].includes(slug)) return 'hero_rogue';
 
   // 3. Exact key match in state entities/objects
   if (state?.entities?.[rawTarget]) return rawTarget;
   if (state?.objects?.[rawTarget]) return rawTarget;
 
-  // 4. Entity match by name in state
+  // 4. Entity match by ID or name in state (accent and case-insensitive)
   if (state?.entities) {
     const entList = Object.values(state.entities);
-    const byName = entList.find(e => e?.name && e.name.toLowerCase() === lower);
+    const byName = entList.find(e => e && (toSlug(e.name) === slug || toSlug(e.id) === slug));
     if (byName) return byName.id;
   }
 
-  // 5. Generic enemy name ("goblin", "esqueleto", "orc")
+  // 5. Object match by ID or label/name in state
+  if (state?.objects) {
+    const objList = Object.values(state.objects);
+    const byObj = objList.find(o => o && (toSlug(o.label) === slug || toSlug(o.name) === slug || toSlug(o.id) === slug));
+    if (byObj) return byObj.id;
+  }
+
+  // 6. Generic enemy name ("goblin", "esqueleto", "orc")
   if (state?.entities) {
     const livingEnemies = Object.values(state.entities).filter(e => e && e.role === 'enemy' && e.alive);
-    if (lower === 'goblin') {
+    if (slug === 'goblin') {
       const g = livingEnemies.find(e => e.id.startsWith('goblin') || e.classId === 'goblin');
       if (g) return g.id;
     }
-    if (lower === 'esqueleto' || lower === 'skeleton') {
+    if (slug === 'esqueleto' || slug === 'skeleton') {
       const s = livingEnemies.find(e => e.id.startsWith('skeleton') || e.classId === 'skeleton');
       if (s) return s.id;
     }
-    if (lower === 'orc') {
+    if (slug === 'orc') {
       const o = livingEnemies.find(e => e.id.startsWith('orc') || e.classId === 'orc');
       if (o) return o.id;
     }
@@ -164,57 +191,57 @@ export function normalizeBatch(raw, state = null) {
       return call;
     }
 
-    let rawName = typeof call.name === 'string' ? call.name.trim().toLowerCase() : call.name;
+    let rawName = typeof call.name === 'string' ? toSlug(call.name) : call.name;
     const rawArgs = call.arguments || call.args || {};
     let callWasCoerced = false;
 
     // Tool Name Aliases
-    if (rawName === 'attack' || rawName === 'attack_enemy' || rawName === 'attack_character' || rawName === 'strike' || rawName === 'cast_ability') {
+    if (['attack', 'attack_enemy', 'attack_character', 'strike', 'cast_ability', 'atacar'].includes(rawName)) {
       rawName = 'use_ability';
       callWasCoerced = true;
-    } else if (rawName === 'move' || rawName === 'move_to' || rawName === 'walk') {
+    } else if (['move', 'move_to', 'walk', 'andar', 'mover', 'caminhar'].includes(rawName)) {
       rawName = 'move_character';
       callWasCoerced = true;
-    } else if (rawName === 'interact' || rawName === 'open' || rawName === 'open_chest') {
+    } else if (['interact', 'open', 'open_chest', 'abrir', 'interagir'].includes(rawName)) {
       rawName = 'interact_object';
       callWasCoerced = true;
-    } else if (rawName === 'push' || rawName === 'push_enemy' || rawName === 'shove' || rawName === 'empurrar' || rawName === 'shield_bash' || rawName === 'bash' || rawName === 'golpe_de_escudo' || rawName === 'escudada') {
+    } else if (['push', 'push_enemy', 'shove', 'empurrar', 'empurrao', 'shield_bash', 'bash', 'golpe_de_escudo', 'escudada'].includes(rawName)) {
       rawName = 'use_ability';
       if (!rawArgs.ability_id && !rawArgs.ability) {
         rawArgs.ability_id = 'shield_bash';
       }
       callWasCoerced = true;
-    } else if (rawName === 'heal' || rawName === 'heal_pulse' || rawName === 'curar' || rawName === 'cura' || rawName === 'pulso_de_cura') {
+    } else if (['heal', 'heal_pulse', 'curar', 'cura', 'pulso_de_cura', 'pulso'].includes(rawName)) {
       rawName = 'use_ability';
       if (!rawArgs.ability_id && !rawArgs.ability) {
         rawArgs.ability_id = 'heal_pulse';
       }
       callWasCoerced = true;
-    } else if (rawName === 'firebolt' || rawName === 'raio_de_fogo') {
+    } else if (['firebolt', 'raio_de_fogo', 'fogo', 'bola_de_fogo'].includes(rawName)) {
       rawName = 'use_ability';
       if (!rawArgs.ability_id && !rawArgs.ability) {
         rawArgs.ability_id = 'firebolt';
       }
       callWasCoerced = true;
-    } else if (rawName === 'slash' || rawName === 'cortar' || rawName === 'corte') {
+    } else if (['slash', 'cortar', 'corte', 'espada'].includes(rawName)) {
       rawName = 'use_ability';
       if (!rawArgs.ability_id && !rawArgs.ability) {
         rawArgs.ability_id = 'slash';
       }
       callWasCoerced = true;
-    } else if (rawName === 'backstab' || rawName === 'apunhalar') {
+    } else if (['backstab', 'apunhalar', 'golpe_pelas_costas'].includes(rawName)) {
       rawName = 'use_ability';
       if (!rawArgs.ability_id && !rawArgs.ability) {
         rawArgs.ability_id = 'backstab';
       }
       callWasCoerced = true;
-    } else if (rawName === 'lockpick' || rawName === 'arrombar') {
+    } else if (['lockpick', 'arrombar', 'arrombamento', 'destrancar'].includes(rawName)) {
       rawName = 'use_ability';
       if (!rawArgs.ability_id && !rawArgs.ability) {
         rawArgs.ability_id = 'lockpick';
       }
       callWasCoerced = true;
-    } else if (rawName === 'potion' || rawName === 'use_potion' || rawName === 'drink_potion' || rawName === 'tomar_pocao' || rawName === 'beber_pocao') {
+    } else if (['potion', 'use_potion', 'drink_potion', 'tomar_pocao', 'beber_pocao', 'pocao', 'usar_pocao', 'curar_com_pocao', 'pocao_de_cura', 'pocao_de_vida'].includes(rawName)) {
       rawName = 'use_item';
       if (!rawArgs.item_id && !rawArgs.item) {
         rawArgs.item_id = 'health_potion';
@@ -256,6 +283,13 @@ export function normalizeBatch(raw, state = null) {
         normArgs.caster_id = state.activeId;
         callWasCoerced = true;
       }
+      if (normArgs.caster_id) {
+        const resolvedCaster = resolveSemanticTarget(normArgs.caster_id, state, state?.activeId);
+        if (resolvedCaster && resolvedCaster !== normArgs.caster_id) {
+          normArgs.caster_id = resolvedCaster;
+          callWasCoerced = true;
+        }
+      }
 
       // 2. ability_id aliases
       if (!normArgs.ability_id && normArgs.ability) {
@@ -269,30 +303,35 @@ export function normalizeBatch(raw, state = null) {
         callWasCoerced = true;
       }
       if (normArgs.ability_id) {
-        const abLower = String(normArgs.ability_id).trim().toLowerCase();
-        if (['push', 'shove', 'empurrar', 'bash', 'escudo', 'escudada', 'golpe_de_escudo'].includes(abLower)) {
+        const abSlug = toSlug(String(normArgs.ability_id));
+        if (['push', 'shove', 'empurrar', 'empurrao', 'bash', 'escudo', 'escudada', 'golpe_de_escudo', 'shield_bash'].includes(abSlug)) {
           if (normArgs.ability_id !== 'shield_bash') {
             normArgs.ability_id = 'shield_bash';
             callWasCoerced = true;
           }
-        } else if (['heal', 'cura', 'curar', 'pulso_de_cura', 'pulso'].includes(abLower)) {
+        } else if (['heal', 'cura', 'curar', 'pulso_de_cura', 'pulso', 'heal_pulse'].includes(abSlug)) {
           if (normArgs.ability_id !== 'heal_pulse') {
             normArgs.ability_id = 'heal_pulse';
             callWasCoerced = true;
           }
-        } else if (['fogo', 'raio', 'raio_de_fogo', 'fire'].includes(abLower)) {
+        } else if (['fogo', 'raio', 'raio_de_fogo', 'fire', 'firebolt', 'bola_de_fogo'].includes(abSlug)) {
           if (normArgs.ability_id !== 'firebolt') {
             normArgs.ability_id = 'firebolt';
             callWasCoerced = true;
           }
-        } else if (['corte', 'cortar', 'espada'].includes(abLower)) {
+        } else if (['corte', 'cortar', 'espada', 'slash'].includes(abSlug)) {
           if (normArgs.ability_id !== 'slash') {
             normArgs.ability_id = 'slash';
             callWasCoerced = true;
           }
-        } else if (['lock', 'arrombamento', 'arrombar'].includes(abLower)) {
+        } else if (['lock', 'arrombamento', 'arrombar', 'destrancar', 'lockpick'].includes(abSlug)) {
           if (normArgs.ability_id !== 'lockpick') {
             normArgs.ability_id = 'lockpick';
+            callWasCoerced = true;
+          }
+        } else if (['backstab', 'apunhalar', 'golpe_pelas_costas'].includes(abSlug)) {
+          if (normArgs.ability_id !== 'backstab') {
+            normArgs.ability_id = 'backstab';
             callWasCoerced = true;
           }
         }
@@ -393,6 +432,17 @@ export function normalizeBatch(raw, state = null) {
         normArgs.character_id = normArgs.caster_id;
         callWasCoerced = true;
       }
+      if (!normArgs.character_id && state?.activeId) {
+        normArgs.character_id = state.activeId;
+        callWasCoerced = true;
+      }
+      if (normArgs.character_id) {
+        const resolvedChar = resolveSemanticTarget(normArgs.character_id, state, state?.activeId);
+        if (resolvedChar && resolvedChar !== normArgs.character_id) {
+          normArgs.character_id = resolvedChar;
+          callWasCoerced = true;
+        }
+      }
       if (normArgs.character_id && 'caster_id' in normArgs) {
         delete normArgs.caster_id;
       }
@@ -407,6 +457,13 @@ export function normalizeBatch(raw, state = null) {
           normArgs.object_id = normArgs.target;
           delete normArgs.target;
           callWasCoerced = true;
+        }
+        if (normArgs.object_id) {
+          const resolvedObj = resolveSemanticTarget(normArgs.object_id, state, normArgs.character_id);
+          if (resolvedObj && resolvedObj !== normArgs.object_id) {
+            normArgs.object_id = resolvedObj;
+            callWasCoerced = true;
+          }
         }
         if (!normArgs.object_id && state && normArgs.character_id) {
           const actor = state.entities?.[normArgs.character_id];
@@ -429,13 +486,13 @@ export function normalizeBatch(raw, state = null) {
         }
         // Normalize item_id aliases
         if (normArgs.item_id) {
-          const itemLower = String(normArgs.item_id).trim().toLowerCase();
-          if (['potion', 'pocao', 'pocao_de_cura', 'pocao_cura', 'cura', 'health_potion', 'vida'].includes(itemLower)) {
+          const itemSlug = toSlug(String(normArgs.item_id));
+          if (['potion', 'pocao', 'pocao_de_cura', 'pocao_cura', 'cura', 'health_potion', 'vida', 'pocao_de_vida', 'pocao_vida'].includes(itemSlug)) {
             if (normArgs.item_id !== 'health_potion') {
               normArgs.item_id = 'health_potion';
               callWasCoerced = true;
             }
-          } else if (['gold', 'coins', 'moedas', 'ouro', 'moedas_de_ouro'].includes(itemLower)) {
+          } else if (['gold', 'coins', 'moedas', 'ouro', 'moedas_de_ouro', 'gold_coins'].includes(itemSlug)) {
             if (normArgs.item_id !== 'gold_coins') {
               normArgs.item_id = 'gold_coins';
               callWasCoerced = true;

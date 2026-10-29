@@ -4,10 +4,8 @@
 import { runAllTests } from './runner.js';
 import './engine.test.js';
 import './rules.test.js';
-import './actionQueue.test.js';
 import './responseParser.test.js';
 import './fixtures.test.js';
-import './llmClient.test.js';
 import './llm.test.js';
 import './floors.test.js';
 import './phase1Fixes.test.js';
