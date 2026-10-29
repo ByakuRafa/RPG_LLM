@@ -229,6 +229,7 @@ export function mountHud(rootEl, bus, { getState } = {}) {
                 <span class="hero-player-label">Jogador ${playerNum}</span>
               </div>
             </div>
+            <button type="button" class="btn-inspect-sheet" id="btn-open-active-sheet" title="Ver Ficha do Herói">📜 Ver Ficha</button>
           </div>
           <div class="hero-stats-row">
             <!-- Thick Stylized HP Bar with Numeric Overlay -->
@@ -376,6 +377,7 @@ export function mountHud(rootEl, bus, { getState } = {}) {
             <div class="mini-name-row">
               <span class="mini-name">${escapeHtml(hero.name)}</span>
               ${isActive ? '<span class="mini-active-dot" title="Turno Ativo"></span>' : ''}
+              <button type="button" class="btn-mini-inspect" data-inspect-hero-id="${hero.id}" title="Ver Ficha de ${escapeHtml(hero.name)}">📜</button>
             </div>
             <div class="mini-bar-track">
               <div class="mini-bar-fill ${miniHpClass}" style="width: ${isDead ? 0 : hpPct}%;"></div>
@@ -429,9 +431,38 @@ export function mountHud(rootEl, bus, { getState } = {}) {
       });
     });
 
+    // Wire Active Hero Sheet Inspect
+    const openSheetBtn = rootEl.querySelector('#btn-open-active-sheet');
+    if (openSheetBtn) {
+      openSheetBtn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        if (active) {
+          bus?.emit('ui:openSheet', { heroId: active.id });
+        }
+      });
+    }
+
+    const activeEmblem = rootEl.querySelector('#hud-active-hero .hero-emblem-frame');
+    if (activeEmblem) {
+      activeEmblem.style.cursor = 'pointer';
+      activeEmblem.addEventListener('click', () => {
+        if (active && !selectedTag) {
+          bus?.emit('ui:openSheet', { heroId: active.id });
+        }
+      });
+    }
+
     // Wire Party mini-card clicks
     rootEl.querySelectorAll('.party-mini-card').forEach(card => {
-      card.addEventListener('click', () => {
+      card.addEventListener('click', (ev) => {
+        if (ev?.target?.closest && ev.target.closest('.btn-mini-inspect')) {
+          ev.stopPropagation?.();
+          const inspectId = ev.target.closest('.btn-mini-inspect').dataset.inspectHeroId;
+          if (inspectId) {
+            bus?.emit('ui:openSheet', { heroId: inspectId });
+          }
+          return;
+        }
         const targetId = card.dataset.heroId;
         if (targetId) {
           bus?.emit('hud:partyCardClicked', { targetId });

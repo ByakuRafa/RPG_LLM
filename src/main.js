@@ -29,6 +29,7 @@ import { mountGmPanel } from './ui/gmPanel.js';
 import { mountHud } from './ui/hud.js';
 import { mountChat } from './ui/chat.js';
 import { mountSettingsModal } from './ui/settingsModal.js';
+import { mountCharacterSheetModal } from './ui/characterSheetModal.js';
 
 /**
  * Builds the view model for renderer consumption.
@@ -190,8 +191,9 @@ export async function boot() {
     getSettings: loadSettings
   });
 
-  // 9. Mount Settings Modal
+  // 9. Mount Settings & Character Sheet Modals
   const settingsModal = mountSettingsModal(bus);
+  const characterSheetModal = mountCharacterSheetModal(bus, { getState: store.getState });
 
   // 10. Mount UI Panels
   const turnBarEl = document.getElementById('turn-bar');

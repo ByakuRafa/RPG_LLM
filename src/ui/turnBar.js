@@ -202,6 +202,13 @@ export function mountTurnBar(rootEl, bus, { getState, isFakeLlm = false } = {}) 
     }
   });
 
+  const sheetBtn = rootEl.querySelector('#btn-character-sheets') || document.getElementById('btn-character-sheets');
+  if (sheetBtn) {
+    sheetBtn.addEventListener('click', () => {
+      bus?.emit('ui:openSheet', { mode: 'creator' });
+    });
+  }
+
   if (typeof getState === 'function') {
     render(getState());
   }
