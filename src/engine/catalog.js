@@ -102,9 +102,36 @@ export const ITEMS = {
 };
 
 export const HERO_ROSTER = [
-  { id: 'hero_warrior', name: 'Thorin', classId: 'warrior', player: 1 },
-  { id: 'hero_mage',    name: 'Lyra',   classId: 'mage',    player: 2 },
-  { id: 'hero_rogue',   name: 'Vex',    classId: 'rogue',   player: 3 }
+  {
+    id: 'hero_warrior',
+    name: 'Thorin',
+    classId: 'warrior',
+    player: 1,
+    title: 'Guardião do Escudo de Ferro',
+    alignment: 'Leal e Bom',
+    personality: 'Disciplinado, honrado e um protetor inabalável de seus aliados.',
+    backstory: 'Veterano das Guerras do Norte, jurou proteger os fracos após a queda de sua cidadela natal nas montanhas.'
+  },
+  {
+    id: 'hero_mage',
+    name: 'Lyra',
+    classId: 'mage',
+    player: 2,
+    title: 'Erudita das Chamas Astrais',
+    alignment: 'Neutro e Bom',
+    personality: 'Curiosa, compassiva e obstinada em desvendar mistérios arcanos.',
+    backstory: 'Estudiosa expulsa do conclave arcano por desvendar magias ancestrais capazes de harmonizar luz curativa e fogo purificador.'
+  },
+  {
+    id: 'hero_rogue',
+    name: 'Vex',
+    classId: 'rogue',
+    player: 3,
+    title: 'Sombra das Catacumbas',
+    alignment: 'Caótico e Neutro',
+    personality: 'Pragmático, irônico e sempre atento a rotas de fuga e tesouros.',
+    backstory: 'Ex-batedor de guildas subterrâneas, aceitou a missão após apostar seu último tostão nas tavernas da capital.'
+  }
 ];
 
 /**

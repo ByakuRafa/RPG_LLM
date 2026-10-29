@@ -451,6 +451,26 @@ describe('Sprint 3: Prompt Builder & State Snapshot (Task 3.4)', () => {
     expect(JSON.stringify(snap1)).toBe(JSON.stringify(snap2));
   });
 
+  it('includes active hero title, personality, backstory, and alignment capped at 200 chars in state snapshot', () => {
+    const s = createInitialState('test-lore-seed');
+    s.entities.hero_warrior.title = 'Campeão das Planícies';
+    s.entities.hero_warrior.alignment = 'Leal e Bom';
+    s.entities.hero_warrior.personality = 'Destemido e protetor dos companheiros em qualquer circunstância.';
+    s.entities.hero_warrior.backstory = 'X'.repeat(350); // >200 chars to test 200 character cap
+
+    s.entities.hero_mage.title = 'Feiticeira Astral';
+
+    const snap = buildStateSnapshot(s, 'A');
+    expect(snap.active_character.title).toBe('Campeão das Planícies');
+    expect(snap.active_character.alignment).toBe('Leal e Bom');
+    expect(snap.active_character.personality).toBe('Destemido e protetor dos companheiros em qualquer circunstância.');
+    expect(snap.active_character.backstory.length).toBe(200);
+    expect(snap.active_character.backstory).toBe('X'.repeat(200));
+
+    const magePartyMember = snap.party.find(p => p.id === 'hero_mage');
+    expect(magePartyMember.title).toBe('Feiticeira Astral');
+  });
+
   it('builds structured Gemini request via buildRequest', () => {
     const req = buildRequest({
       state,

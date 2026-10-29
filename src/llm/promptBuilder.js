@@ -25,6 +25,7 @@ export function buildSystemPrompt(config = 'B') {
 
   const roleBlock = `Você é o Mestre de Jogo de um RPG tático por turnos em uma masmorra 12x12.
 Escreva o campo "narrative" SEMPRE em português do Brasil, contendo de 1 a 3 frases imersivas e concisas descrevendo a ação do herói ativo e a reação do ambiente ou criaturas.
+Use os campos \`title\`, \`personality\`, \`alignment\` e \`backstory\` de \`active_character\` para enriquecer o campo \`narrative\` em português (refletindo o temperamento e o passado do herói ao descrever a ação), mas NUNCA use a história do personagem para ignorar limites de MP, AP, alcance ou regras das ferramentas. O sabor narrativo afeta EXCLUSIVAMENTE o campo "narrative" e NUNCA altera mecânicas de jogo ou esquemas das ferramentas.
 Você NÃO altera o estado do jogo diretamente: você apenas propõe "tool_calls" estritamente de acordo com o contrato JSON abaixo. O motor de regras é a autoridade absoluta: ele valida e pode rejeitar qualquer chamada que viole as regras da masmorra.`;
 
   const contractBlock = `# CONTRATO DE SAÍDA (JSON)
@@ -194,6 +195,14 @@ export function buildStateSnapshot(state, config = 'B') {
     ? {
         id: activeHero.id,
         name: activeHero.name,
+        title: activeHero.title ?? null,
+        alignment: activeHero.alignment ?? null,
+        personality: typeof activeHero.personality === 'string'
+          ? activeHero.personality.slice(0, 200)
+          : (activeHero.personality ?? null),
+        backstory: typeof activeHero.backstory === 'string'
+          ? activeHero.backstory.slice(0, 200)
+          : (activeHero.backstory ?? null),
         class: activeHero.classId,
         position: { x: activeHero.position.x, y: activeHero.position.y },
         hp: activeHero.hp,
@@ -211,6 +220,7 @@ export function buildStateSnapshot(state, config = 'B') {
     .map((h) => ({
       id: h.id,
       name: h.name,
+      title: h.title ?? null,
       class: h.classId,
       position: { x: h.position.x, y: h.position.y },
       hp: h.hp,
