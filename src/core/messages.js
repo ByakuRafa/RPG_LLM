@@ -51,7 +51,8 @@ export const REJECT = Object.freeze({
   NOT_ADJACENT: () => 'Personagem precisa estar adjacente ao objeto.',
   OBJECT_LOCKED: () => 'O objeto está trancado. Use a habilidade de arrombar primeiro.',
   ALREADY_OPENED: () => 'O objeto já foi aberto.',
-  TOO_MANY_CALLS: () => 'Número excessivo de ações em um único lote.'
+  TOO_MANY_CALLS: () => 'Número excessivo de ações em um único lote.',
+  NO_TARGETS_IN_AOE: () => 'Nenhum alvo válido encontrado na área de efeito da habilidade.'
 });
 
 /**
@@ -185,6 +186,13 @@ export function describeEvent(event, state) {
       return {
         level: 'SYSTEM',
         text: isWon ? MSG.gameOverWon() : MSG.gameOverLost()
+      };
+    }
+
+    case 'aoe_blast': {
+      return {
+        level: 'COMBAT',
+        text: `Área de efeito detonada em (${event.center?.x},${event.center?.y}) cobrindo ${event.tiles?.length || 0} casas.`
       };
     }
 

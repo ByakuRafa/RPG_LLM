@@ -5,7 +5,7 @@
 import { CONFIG, PHASE } from '../core/config.js';
 import { REJECT } from '../core/messages.js';
 import { toSlug } from '../core/schema.js';
-import { inBounds, isWallAt, getBlockerAt, manhattan, computeReachable, key } from './pathfinding.js';
+import { inBounds, isWallAt, getBlockerAt, manhattan, computeReachable, key, computeAoETiles } from './pathfinding.js';
 import { ABILITIES, ITEMS, isHostile } from './catalog.js';
 
 export { isHostile };
@@ -208,7 +208,7 @@ export function validateMove(s, { character_id, target_x, target_y }, ctx = {}) 
  * @param {object} [ctx]
  * @returns {{ ok: boolean, code?: string, message?: string, resolved?: object }}
  */
-export function validateUseAbility(s, { caster_id, ability_id, target_id }, ctx = {}) {
+export function validateUseAbility(s, { caster_id, ability_id, target_id, target_x, target_y }, ctx = {}) {
   // 1. Actor guards
   const actorErr = checkActor(s, caster_id, ctx);
   if (actorErr) return actorErr;
@@ -235,7 +235,118 @@ export function validateUseAbility(s, { caster_id, ability_id, target_id }, ctx 
     return { ok: false, code: 'NO_AP', message: REJECT.NO_AP(actor) };
   }
 
-  // 4. Resolve target
+  // AoE Handling
+  if (ability.aoe) {
+    let center = null;
+    if (ability.target === 'self') {
+      center = { x: actor.position.x, y: actor.position.y };
+    } else if (ability.target === 'tile') {
+      if (typeof target_x === 'number' && typeof target_y === 'number') {
+        center = { x: target_x, y: target_y };
+      } else if (target_id) {
+        const res = resolveTarget(s, target_id);
+        if (!res || !res.ref?.position) {
+          return { ok: false, code: 'UNKNOWN_TARGET', message: REJECT.UNKNOWN_TARGET({ targetId: target_id }) };
+        }
+        center = { x: res.ref.position.x, y: res.ref.position.y };
+      } else {
+        return { ok: false, code: 'UNKNOWN_TARGET', message: REJECT.UNKNOWN_TARGET({ targetId: 'tile' }) };
+      }
+    } else {
+      if (target_id) {
+        const res = resolveTarget(s, target_id);
+        if (!res || !res.ref?.position) {
+          return { ok: false, code: 'UNKNOWN_TARGET', message: REJECT.UNKNOWN_TARGET({ targetId: target_id }) };
+        }
+        center = { x: res.ref.position.x, y: res.ref.position.y };
+      } else if (typeof target_x === 'number' && typeof target_y === 'number') {
+        center = { x: target_x, y: target_y };
+      } else {
+        center = { x: actor.position.x, y: actor.position.y };
+      }
+    }
+
+    if (!inBounds(s.map, center.x, center.y)) {
+      return { ok: false, code: 'OUT_OF_BOUNDS', message: REJECT.OUT_OF_BOUNDS() };
+    }
+
+    const dist = manhattan(actor.position.x, actor.position.y, center.x, center.y);
+    const range = ability.range ?? 0;
+    if (dist > range) {
+      return { ok: false, code: 'OUT_OF_RANGE', message: REJECT.OUT_OF_RANGE({ range, distance: dist }) };
+    }
+
+    const tiles = computeAoETiles(s.map, center, ability.aoe, actor.position);
+    const tileSet = new Set(tiles.map(t => key(t.x, t.y)));
+
+    const filter = ability.aoe.targetFilter || 'enemy';
+    const matchingEntities = Object.values(s.entities || {})
+      .filter(e => {
+        if (!e || !e.alive || (typeof e.hp === 'number' && e.hp <= 0)) return false;
+        if (!e.position) return false;
+        if (!tileSet.has(key(e.position.x, e.position.y))) return false;
+        if (filter === 'enemy') {
+          return isHostile(actor, e);
+        }
+        if (filter === 'ally') {
+          return !isHostile(actor, e);
+        }
+        return true;
+      })
+      .sort((a, b) => a.id.localeCompare(b.id));
+
+    if (matchingEntities.length === 0) {
+      return {
+        ok: false,
+        code: 'NO_TARGETS_IN_AOE',
+        message: REJECT.NO_TARGETS_IN_AOE()
+      };
+    }
+
+    const targets = matchingEntities.map(t => {
+      let pushTo = null;
+      let pushBlockedReason = null;
+      if (ability.effect?.push) {
+        const origin = (ability.target === 'self') ? actor.position : center;
+        let dx = Math.sign(t.position.x - origin.x);
+        let dy = Math.sign(t.position.y - origin.y);
+        if (dx === 0 && dy === 0) {
+          dx = 0;
+          dy = 1;
+        }
+        const destX = t.position.x + dx;
+        const destY = t.position.y + dy;
+
+        if (!inBounds(s.map, destX, destY)) {
+          pushBlockedReason = 'edge';
+        } else if (isWallAt(s.map, destX, destY)) {
+          pushBlockedReason = 'wall';
+        } else if (getBlockerAt(s, destX, destY, { ignoreId: t.id })) {
+          pushBlockedReason = 'occupied';
+        } else {
+          pushTo = { x: destX, y: destY };
+        }
+      }
+      return {
+        id: t.id,
+        pushTo,
+        pushBlockedReason
+      };
+    });
+
+    return {
+      ok: true,
+      resolved: {
+        ability,
+        isAoE: true,
+        center,
+        tiles,
+        targets
+      }
+    };
+  }
+
+  // 4. Resolve target (Single-target)
   const effectiveTargetId = target_id || ((ability.target === 'ally' || ability.target === 'self') ? caster_id : null);
   const resolvedTarget = resolveTarget(s, effectiveTargetId);
   if (!resolvedTarget) {
@@ -250,6 +361,10 @@ export function validateUseAbility(s, { caster_id, ability_id, target_id }, ctx 
     }
   } else if (ability.target === 'ally') {
     if (resolvedTarget.kind !== 'entity' || isHostile(actor, target)) {
+      return { ok: false, code: 'INVALID_TARGET_TYPE', message: REJECT.INVALID_TARGET_TYPE() };
+    }
+  } else if (ability.target === 'self') {
+    if (resolvedTarget.kind !== 'entity' || target.id !== actor.id) {
       return { ok: false, code: 'INVALID_TARGET_TYPE', message: REJECT.INVALID_TARGET_TYPE() };
     }
   } else if (ability.target === 'object') {

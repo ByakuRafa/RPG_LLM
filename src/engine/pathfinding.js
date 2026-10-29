@@ -18,11 +18,17 @@ export function manhattan(x1, y1, x2, y2) {
 }
 
 export function inBounds(map, x, y) {
-  return x >= 0 && y >= 0 && x < map.width && y < map.height;
+  if (!map) return false;
+  const width = map.width ?? (Array.isArray(map[0]) ? map[0].length : 0);
+  const height = map.height ?? (Array.isArray(map) ? map.length : 0);
+  return x >= 0 && y >= 0 && x < width && y < height;
 }
 
 export function isWallAt(map, x, y) {
-  return map.tiles[y][x] === TILE.WALL;
+  if (!map) return true;
+  const tiles = map.tiles ?? map;
+  if (!tiles || !tiles[y]) return true;
+  return tiles[y][x] === TILE.WALL;
 }
 
 /**
@@ -134,4 +140,88 @@ export function computeDistanceField(state, from, { ignoreUnits = false, ignoreI
   }
 
   return out;
+}
+
+/**
+ * Computes tiles affected by an Area of Effect (AoE) ability.
+ * Supports shapes: 'circle', 'adjacent', 'line'.
+ * Only includes in-bounds, non-wall tiles.
+ *
+ * @param {object} map Map object with tiles/grid, width, height
+ * @param {{ x: number, y: number }} center Center/target coordinates
+ * @param {{ shape: 'circle'|'adjacent'|'line', radius: number }} aoeDef
+ * @param {{ x: number, y: number }|null} [casterPos=null] Caster position (required for 'line')
+ * @returns {Array<{ x: number, y: number }>}
+ */
+export function computeAoETiles(map, center, aoeDef, casterPos = null) {
+  if (!map || !center || !aoeDef) return [];
+  const radius = Math.max(0, aoeDef.radius ?? 1);
+  const shape = aoeDef.shape || 'circle';
+  const tiles = [];
+  const seen = new Set();
+
+  if (shape === 'circle') {
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        if (Math.abs(dx) + Math.abs(dy) <= radius) {
+          const x = center.x + dx;
+          const y = center.y + dy;
+          if (inBounds(map, x, y) && !isWallAt(map, x, y)) {
+            const k = key(x, y);
+            if (!seen.has(k)) {
+              seen.add(k);
+              tiles.push({ x, y });
+            }
+          }
+        }
+      }
+    }
+  } else if (shape === 'adjacent') {
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        const dist = Math.abs(dx) + Math.abs(dy);
+        if (dist >= 1 && dist <= radius) {
+          const x = center.x + dx;
+          const y = center.y + dy;
+          if (inBounds(map, x, y) && !isWallAt(map, x, y)) {
+            const k = key(x, y);
+            if (!seen.has(k)) {
+              seen.add(k);
+              tiles.push({ x, y });
+            }
+          }
+        }
+      }
+    }
+  } else if (shape === 'line') {
+    const origin = casterPos || center;
+    let dirX = Math.sign(center.x - origin.x);
+    let dirY = Math.sign(center.y - origin.y);
+
+    if (dirX === 0 && dirY === 0) {
+      dirY = -1;
+    } else if (dirX !== 0 && dirY !== 0) {
+      if (Math.abs(center.x - origin.x) >= Math.abs(center.y - origin.y)) {
+        dirY = 0;
+      } else {
+        dirX = 0;
+      }
+    }
+
+    for (let step = 1; step <= radius; step++) {
+      const x = origin.x + dirX * step;
+      const y = origin.y + dirY * step;
+      if (!inBounds(map, x, y) || isWallAt(map, x, y)) {
+        break;
+      }
+      const k = key(x, y);
+      if (!seen.has(k)) {
+        seen.add(k);
+        tiles.push({ x, y });
+      }
+    }
+  }
+
+  tiles.sort((a, b) => a.y - b.y || a.x - b.x);
+  return tiles;
 }

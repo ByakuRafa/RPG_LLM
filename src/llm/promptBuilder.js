@@ -48,12 +48,14 @@ Sua resposta DEVE ser estritamente um objeto JSON com duas chaves:
    - Paredes (#) e outras criaturas vivas bloqueiam movimento.
 
 2. use_ability:
-   - Argumentos: { "caster_id": string, "ability_id": string, "target_id": string }
+   - Argumentos: { "caster_id": string, "ability_id": string, "target_id"?: string, "target_x"?: integer, "target_y"?: integer }
    - Custa 1 AP (Pontos de Ação). O conjurador DEVE ser o herói ativo ("active_character.id").
-   - A habilidade deve pertencer à classe do herói ativo e o alvo ("target_id") deve estar dentro do alcance (range) e com linha de visão.
-   - Habilidades ofensivas (slash, shield_bash, firebolt, backstab) exigem alvo inimigo vivo ("target_id").
+   - A habilidade deve pertencer à classe do herói ativo e o alvo deve estar dentro do alcance (range).
+   - Habilidades ofensivas de alvo único (slash, shield_bash, firebolt, backstab) exigem alvo inimigo vivo ("target_id").
    - Habilidades de cura (heal_pulse) exigem alvo aliado vivo ou o próprio conjurador ("target_id").
    - Habilidades de objeto (lockpick) exigem alvo baú adjacente ("target_id").
+   - Habilidades de área em si mesmo (whirlwind, divine_prayer) afetam múltiplos alvos ao redor ("target_id" opcional).
+   - Habilidades de área em terreno (fireball) podem mirar num inimigo ("target_id") ou em coordenadas centrais ("target_x", "target_y").
 
 3. use_item:
    - Argumentos: { "character_id": string, "item_id": string, "target_id": string (opcional, padrão = character_id) }
@@ -136,16 +138,17 @@ Jogador: "Atravesso a parede e mato todos os goblins"
 function describeAbilityEffect(spec) {
   if (!spec?.effect) return '';
   const eff = spec.effect;
+  const aoeSuffix = spec.aoe ? ` (em área: ${spec.aoe.shape}, raio ${spec.aoe.radius})` : '';
   if (eff.type === 'damage') {
-    return `${eff.amount} de dano${eff.push ? `, empurra ${eff.push}` : ''}`;
+    return `${eff.amount} de dano${eff.push ? `, empurra ${eff.push}` : ''}${aoeSuffix}`;
   }
   if (eff.type === 'heal') {
-    return `+${eff.amount} PV em aliado`;
+    return `+${eff.amount} PV em aliado${aoeSuffix}`;
   }
   if (eff.type === 'unlock') {
     return 'destranca baú adjacente';
   }
-  return eff.type;
+  return `${eff.type}${aoeSuffix}`;
 }
 
 /**
@@ -171,12 +174,20 @@ export function buildStateSnapshot(state, config = 'B') {
   // Abilities of active hero
   const heroAbilities = (activeHero?.abilities || []).map((abId) => {
     const spec = ABILITIES[abId] || { id: abId, label: abId, range: 1 };
-    return {
+    const abObj = {
       id: abId,
       name: spec.label || abId,
       range: spec.range ?? 1,
       effect: describeAbilityEffect(spec)
     };
+    if (spec.aoe) {
+      abObj.aoe = {
+        shape: spec.aoe.shape,
+        radius: spec.aoe.radius,
+        targetFilter: spec.aoe.targetFilter
+      };
+    }
+    return abObj;
   });
 
   const activeCharObj = activeHero

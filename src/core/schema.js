@@ -18,10 +18,10 @@ export const TOOL_SPECS = Object.freeze({
   use_ability: Object.freeze({
     required: Object.freeze({
       caster_id: 'id',
-      ability_id: 'id',
-      target_id: 'id'
+      ability_id: 'id'
     }),
     optional: Object.freeze({
+      target_id: 'id',
       character_id: 'id',
       target_x: 'int',
       target_y: 'int'
@@ -217,10 +217,28 @@ export function normalizeBatch(raw, state = null) {
         rawArgs.ability_id = 'heal_pulse';
       }
       callWasCoerced = true;
-    } else if (['firebolt', 'raio_de_fogo', 'fogo', 'bola_de_fogo'].includes(rawName)) {
+    } else if (['firebolt', 'raio_de_fogo', 'fogo'].includes(rawName)) {
       rawName = 'use_ability';
       if (!rawArgs.ability_id && !rawArgs.ability) {
         rawArgs.ability_id = 'firebolt';
+      }
+      callWasCoerced = true;
+    } else if (['fireball', 'bola_de_fogo'].includes(rawName)) {
+      rawName = 'use_ability';
+      if (!rawArgs.ability_id && !rawArgs.ability) {
+        rawArgs.ability_id = 'fireball';
+      }
+      callWasCoerced = true;
+    } else if (['whirlwind', 'redemoinho', 'giro'].includes(rawName)) {
+      rawName = 'use_ability';
+      if (!rawArgs.ability_id && !rawArgs.ability) {
+        rawArgs.ability_id = 'whirlwind';
+      }
+      callWasCoerced = true;
+    } else if (['divine_prayer', 'prece', 'prece_sagrada'].includes(rawName)) {
+      rawName = 'use_ability';
+      if (!rawArgs.ability_id && !rawArgs.ability) {
+        rawArgs.ability_id = 'divine_prayer';
       }
       callWasCoerced = true;
     } else if (['slash', 'cortar', 'corte', 'espada'].includes(rawName)) {
@@ -314,9 +332,24 @@ export function normalizeBatch(raw, state = null) {
             normArgs.ability_id = 'heal_pulse';
             callWasCoerced = true;
           }
-        } else if (['fogo', 'raio', 'raio_de_fogo', 'fire', 'firebolt', 'bola_de_fogo'].includes(abSlug)) {
+        } else if (['fogo', 'raio', 'raio_de_fogo', 'fire', 'firebolt'].includes(abSlug)) {
           if (normArgs.ability_id !== 'firebolt') {
             normArgs.ability_id = 'firebolt';
+            callWasCoerced = true;
+          }
+        } else if (['fireball', 'bola_de_fogo'].includes(abSlug)) {
+          if (normArgs.ability_id !== 'fireball') {
+            normArgs.ability_id = 'fireball';
+            callWasCoerced = true;
+          }
+        } else if (['whirlwind', 'redemoinho', 'giro'].includes(abSlug)) {
+          if (normArgs.ability_id !== 'whirlwind') {
+            normArgs.ability_id = 'whirlwind';
+            callWasCoerced = true;
+          }
+        } else if (['divine_prayer', 'prece', 'prece_sagrada'].includes(abSlug)) {
+          if (normArgs.ability_id !== 'divine_prayer') {
+            normArgs.ability_id = 'divine_prayer';
             callWasCoerced = true;
           }
         } else if (['corte', 'cortar', 'espada', 'slash'].includes(abSlug)) {
@@ -344,6 +377,12 @@ export function normalizeBatch(raw, state = null) {
         }
       }
 
+      // Auto-fill target_id = caster_id for self AoE abilities
+      if (['whirlwind', 'divine_prayer'].includes(normArgs.ability_id) && !normArgs.target_id) {
+        normArgs.target_id = normArgs.caster_id || state?.activeId;
+        callWasCoerced = true;
+      }
+
       // 3. target_id aliases
       if (!normArgs.target_id && normArgs.target) {
         normArgs.target_id = normArgs.target;
@@ -365,7 +404,24 @@ export function normalizeBatch(raw, state = null) {
         }
       }
 
-      // If target_id missing but target_x & target_y present, resolve from state
+      // If target_id is present for tile ability (fireball) and target_x/y missing, resolve coordinates
+      if (normArgs.ability_id === 'fireball' && normArgs.target_id && (typeof normArgs.target_x !== 'number' || typeof normArgs.target_y !== 'number')) {
+        const targetEnt = state?.entities?.[normArgs.target_id];
+        if (targetEnt && targetEnt.position) {
+          normArgs.target_x = targetEnt.position.x;
+          normArgs.target_y = targetEnt.position.y;
+          callWasCoerced = true;
+        } else {
+          const targetObj = state?.objects?.[normArgs.target_id];
+          if (targetObj && targetObj.position) {
+            normArgs.target_x = targetObj.position.x;
+            normArgs.target_y = targetObj.position.y;
+            callWasCoerced = true;
+          }
+        }
+      }
+
+      // If target_id missing but target_x & target_y present, resolve entity from state if applicable
       if (!normArgs.target_id && state && typeof normArgs.target_x === 'number' && typeof normArgs.target_y === 'number') {
         const entAtPos = Object.values(state.entities || {}).find(e => e && e.alive && e.position?.x === normArgs.target_x && e.position?.y === normArgs.target_y);
         if (entAtPos) {
@@ -380,8 +436,9 @@ export function normalizeBatch(raw, state = null) {
         }
       }
 
-      // If target_id still missing, resolve contextually based on ability type:
-      if (!normArgs.target_id && state && normArgs.caster_id) {
+      // If target_id still missing, resolve contextually based on ability type (unless tile ability with coordinates)
+      const hasTileTarget = normArgs.ability_id === 'fireball' && typeof normArgs.target_x === 'number' && typeof normArgs.target_y === 'number';
+      if (!normArgs.target_id && !hasTileTarget && state && normArgs.caster_id) {
         const caster = state.entities?.[normArgs.caster_id];
         if (caster && caster.position) {
           const isHeal = normArgs.ability_id === 'heal_pulse';
@@ -419,11 +476,11 @@ export function normalizeBatch(raw, state = null) {
         }
       }
 
-      // Prune redundant character_id / coordinates if target_id is present
+      // Prune redundant character_id / coordinates if target_id is present (preserve coordinates for tile abilities)
       if (normArgs.caster_id && 'character_id' in normArgs) {
         delete normArgs.character_id;
       }
-      if (normArgs.target_id) {
+      if (normArgs.target_id && normArgs.ability_id !== 'fireball') {
         delete normArgs.target_x;
         delete normArgs.target_y;
       }

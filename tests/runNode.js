@@ -4,12 +4,12 @@
 import { runAllTests } from './runner.js';
 import './engine.test.js';
 import './rules.test.js';
-import './responseParser.test.js';
 import './fixtures.test.js';
 import './llm.test.js';
 import './floors.test.js';
 import './phase1Fixes.test.js';
 import './phase2Tactical.test.js';
+import './phase3AoE.test.js';
 
 async function main() {
   console.log('=== RPG_LLM TEST RUNNER ===\n');

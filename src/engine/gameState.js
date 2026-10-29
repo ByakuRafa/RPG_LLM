@@ -304,7 +304,7 @@ export function applyHeal(s, targetId, amount, meta = {}) {
  * @param {object} [resolved]
  * @returns {{ state: object, events: object[] }}
  */
-export function applyAbility(s, { caster_id, ability_id, target_id }, resolved = {}) {
+export function applyAbility(s, { caster_id, ability_id, target_id, target_x, target_y }, resolved = {}) {
   const next = cloneState(s);
   const caster = next.entities?.[caster_id];
   const ability = resolved.ability || ABILITIES[ability_id];
@@ -316,6 +316,104 @@ export function applyAbility(s, { caster_id, ability_id, target_id }, resolved =
 
   const events = [];
   const effect = ability?.effect || {};
+
+  // AoE Multi-Target Execution
+  if (resolved.isAoE) {
+    events.push({
+      type: 'aoe_blast',
+      abilityId: ability_id,
+      center: resolved.center,
+      tiles: resolved.tiles
+    });
+
+    for (const tInfo of (resolved.targets || [])) {
+      const target = next.entities?.[tInfo.id];
+      if (!target || !target.alive) continue;
+
+      if (effect.type === 'damage') {
+        const dmg = Math.max(0, effect.amount ?? 0);
+        target.hp = Math.max(0, target.hp - dmg);
+
+        events.push({
+          type: 'damage',
+          id: target.id,
+          sourceId: caster_id,
+          abilityId: ability_id,
+          amount: dmg,
+          hp: target.hp
+        });
+
+        if (target.hp === 0 && target.alive) {
+          target.alive = false;
+          events.push({ type: 'death', id: target.id });
+
+          // Unlock exit door if all room enemies are defeated
+          const remainingEnemies = getAliveEnemies(next);
+          if (remainingEnemies.length === 0 && next.objects?.['exit_door'] && next.objects['exit_door'].locked) {
+            next.objects['exit_door'].locked = false;
+            next.objects['exit_door'].blocksMovement = false;
+            events.push({
+              type: 'door_unlocked',
+              id: 'exit_door',
+              message: 'Todos os inimigos da câmara foram derrotados! A passagem para o próximo andar se abriu.'
+            });
+          }
+
+          const outcome = evaluateGameOver(next);
+          if (outcome) {
+            next.status = outcome;
+            next.phase = PHASE.GAME_OVER;
+            next.gameOver = true;
+            events.push({ type: 'game_over', status: outcome, result: outcome });
+          }
+        }
+
+        if (effect.push) {
+          let pushTo = tInfo.pushTo;
+          let pushBlockedReason = tInfo.pushBlockedReason;
+
+          // Check if previously moved entity or object now blocks pushTo
+          if (pushTo && getBlockerAt(next, pushTo.x, pushTo.y, { ignoreId: target.id })) {
+            pushTo = null;
+            pushBlockedReason = 'occupied';
+          }
+
+          if (pushTo) {
+            const fromPos = { ...target.position };
+            target.position = { x: pushTo.x, y: pushTo.y };
+            events.push({
+              type: 'push',
+              id: target.id,
+              from: fromPos,
+              to: { x: target.position.x, y: target.position.y }
+            });
+          } else if (pushBlockedReason) {
+            events.push({
+              type: 'push_blocked',
+              id: target.id,
+              reason: pushBlockedReason
+            });
+          }
+        }
+      } else if (effect.type === 'heal') {
+        const healAmt = Math.max(0, effect.amount ?? 0);
+        const oldHp = target.hp;
+        target.hp = Math.min(target.maxHp, target.hp + healAmt);
+        const effective = target.hp - oldHp;
+
+        events.push({
+          type: 'heal',
+          id: target.id,
+          sourceId: caster_id,
+          via: ability_id,
+          amount: effective,
+          hp: target.hp
+        });
+      }
+    }
+
+    return { state: next, events };
+  }
 
   if (effect.type === 'damage') {
     let target = next.entities?.[target_id];

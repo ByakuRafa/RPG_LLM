@@ -12,7 +12,7 @@ export const CLASSES = {
     maxHp: 30,
     maxMp: 4,
     maxAp: 1,
-    abilities: ['slash', 'shield_bash'],
+    abilities: ['slash', 'shield_bash', 'whirlwind'],
     tokenUrl: './assets/tokens/warrior_64.png'
   },
   mage: {
@@ -23,7 +23,7 @@ export const CLASSES = {
     maxHp: 18,
     maxMp: 3,
     maxAp: 1,
-    abilities: ['firebolt', 'heal_pulse'],
+    abilities: ['firebolt', 'heal_pulse', 'fireball', 'divine_prayer'],
     tokenUrl: './assets/tokens/mage_64.png'
   },
   rogue: {
@@ -80,12 +80,15 @@ export const CHEST_TOKENS = {
   opened: './assets/tokens/chest_opened_64.png'
 };
 
-/** target: 'enemy' (hostile to caster) | 'ally' (same side, incl. self) | 'object' */
+/** target: 'enemy' (hostile to caster) | 'ally' (same side, incl. self) | 'object' | 'self' | 'tile' */
 export const ABILITIES = {
   slash:         { id: 'slash',         label: 'Corte',           apCost: 1, range: 1, target: 'enemy',  effect: { type: 'damage', amount: 6 } },
   shield_bash:   { id: 'shield_bash',   label: 'Golpe de Escudo', apCost: 1, range: 1, target: 'enemy',  effect: { type: 'damage', amount: 4, push: 1 } },
+  whirlwind:     { id: 'whirlwind',     label: 'Redemoinho',      apCost: 1, range: 0, target: 'self',  aoe: { shape: 'adjacent', radius: 1, targetFilter: 'enemy' }, effect: { type: 'damage', amount: 5, push: 1 } },
   firebolt:      { id: 'firebolt',      label: 'Raio de Fogo',    apCost: 1, range: 4, target: 'enemy',  effect: { type: 'damage', amount: 7 } },
+  fireball:      { id: 'fireball',      label: 'Bola de Fogo',    apCost: 1, range: 4, target: 'tile',   aoe: { shape: 'circle', radius: 1, targetFilter: 'enemy' },   effect: { type: 'damage', amount: 8 } },
   heal_pulse:    { id: 'heal_pulse',    label: 'Pulso de Cura',   apCost: 1, range: 3, target: 'ally',   effect: { type: 'heal',   amount: 8 } },
+  divine_prayer: { id: 'divine_prayer', label: 'Prece Sagrada',   apCost: 1, range: 0, target: 'self',  aoe: { shape: 'circle', radius: 2, targetFilter: 'ally' },    effect: { type: 'heal',   amount: 6 } },
   backstab:      { id: 'backstab',      label: 'Apunhalar',       apCost: 1, range: 1, target: 'enemy',  effect: { type: 'damage', amount: 8 } },
   lockpick:      { id: 'lockpick',      label: 'Arrombar',        apCost: 1, range: 1, target: 'object', effect: { type: 'unlock' } },
   goblin_strike: { id: 'goblin_strike', label: 'Golpe Goblin',    apCost: 1, range: 1, target: 'enemy',  effect: { type: 'damage', amount: 3 } },
