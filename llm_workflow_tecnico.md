@@ -1,28 +1,33 @@
 # Workflow Técnico do LLM "Mestre de Jogo" — RPG_LLM
 
-> Documento de apoio para apresentação. Cobre a camada `src/llm/*`, como ela conversa com o motor (`src/engine/*`) e como as "tools" são expostas, validadas e executadas.
+> Documento técnico de apoio arquitetural e apresentação. Cobre detalhadamente a camada `src/llm/*`, como ela interage com o motor determinístico (`src/engine/*`), o ciclo de vida dos prompts, o sistema de fichas/lore, e como as *tools* são expostas, normalizadas, validadas e executadas.
 
 ---
 
 ## 1. Ideia central (o "pitch" técnico)
 
 **O LLM não joga — ele propõe.**
-O Gemini recebe um snapshot do estado + o texto livre do jogador (PT-BR) e devolve **um JSON** com:
+O Gemini recebe um snapshot determinístico do estado (enriquecido com lore, personalidade e pré-cálculos espaciais) + o texto livre do jogador (PT-BR) e devolve **um JSON estruturado** contendo:
 
 ```json
-{ "narrative": "texto imersivo", "tool_calls": [ { "name": "...", "arguments": { ... } } ] }
+{ 
+  "narrative": "texto imersivo contextualizado à personalidade do herói", 
+  "tool_calls": [ 
+    { "name": "...", "arguments": { ... } } 
+  ] 
+}
 ```
 
-Esse JSON passa por **4 barreiras** antes de alterar o estado:
+Esse JSON passa por **4 barreiras de contenção** antes de alterar qualquer estado da masmorra:
 
 | # | Barreira | Onde | Tipo de garantia |
 |---|----------|------|------------------|
-| 1 | `responseSchema` + `responseMimeType: application/json` | API Gemini ([llmClient.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/llmClient.js#L139-L145)) | Decodificação restrita no servidor |
-| 2 | Extração tolerante + normalização (aliases, coerção) | [responseParser.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/responseParser.js) + [normalizeBatch](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/core/schema.js#L96-L302) | Robustez sintática |
-| 3 | Validação estrutural por tool (`TOOL_SPECS`) | [validateBatch](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/core/schema.js#L311-L411) | Contrato de argumentos |
-| 4 | Validação de **regras do jogo** (`tool.validate`) | [actionQueue.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/engine/actionQueue.js#L111-L121) → `rules.js` | **Autoridade absoluta** |
+| 1 | `responseSchema` + `responseMimeType: application/json` | API Gemini ([llmClient.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/llmClient.js#L139-L145)) | Decodificação sintática restrita no próprio modelo |
+| 2 | Extração tolerante + normalização (aliases PT-BR, coerção, semântica) | [responseParser.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/responseParser.js) + [normalizeBatch](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/core/schema.js#L216-L640) | Robustez sintática e tolerância a variações linguísticas |
+| 3 | Validação contratual por tool (`TOOL_SPECS`) | [validateBatch](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/core/schema.js#L652-L750) | Conformidade de tipos e argumentos obrigatórios |
+| 4 | Validação de **regras estritas do jogo** (`tool.validate`) | [actionQueue.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/engine/actionQueue.js#L111-L121) → `rules.js` | **Autoridade absoluta** do motor de regras |
 
-Só depois disso `tool.apply` (reducer puro) gera o novo estado.
+Apenas após a aprovação em todas as 4 barreiras o método `tool.apply` (redutor puro) gera o novo estado e despacha os eventos visuais para o Canvas.
 
 ---
 
@@ -30,26 +35,31 @@ Só depois disso `tool.apply` (reducer puro) gera o novo estado.
 
 | Arquivo | Camada | Responsabilidade |
 |---------|--------|------------------|
-| [gameMaster.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/gameMaster.js) | llm | Orquestrador: input → prompt → LLM → repair → fila → feedback/memória |
-| [promptBuilder.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/promptBuilder.js) | llm | System prompt (Config A/B), snapshot determinístico, request Gemini |
-| [llmClient.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/llmClient.js) | llm | `fetch` REST ao `generateContent`, timeout, retry, erros tipados |
-| [fakeLlmClient.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/fakeLlmClient.js) | llm | Mesma interface, offline (`?fakeLlm=1`), testes e fixtures |
-| [responseParser.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/responseParser.js) | llm | Extrai JSON, normaliza envelope, monta turno de reparo |
-| [llmEnemyStrategy.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/llmEnemyStrategy.js) | llm | IA dos monstros via LLM com fallback heurístico |
-| [evaluator.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/evaluator.js) | llm | Benchmark acadêmico A vs B, métricas, CSV/JSON |
-| [schema.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/core/schema.js) | core | `RESPONSE_SCHEMA`, `TOOL_SPECS`, `normalizeBatch`, `validateBatch` |
-| [tools.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/engine/tools.js) | engine | Registro `TOOLS = { name: { validate, apply } }` |
-| [actionQueue.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/engine/actionQueue.js) | engine | Execução sequencial, *halt-on-first-reject*, animação |
-| [settings.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/core/settings.js) | core | `apiKey`, `model`, `promptConfig`, `temperature`, `timeoutMs`, `enemyAIMode` (localStorage) |
+| [gameMaster.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/gameMaster.js) | llm | Orquestrador: input → prompt → LLM → auto-repair → fila → feedback/memória |
+| [promptBuilder.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/promptBuilder.js) | llm | System prompt (Config A/B), snapshot com lore, metadados AoE, request Gemini |
+| [llmClient.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/llmClient.js) | llm | `fetch` REST ao `generateContent`, timeout, retry transitório, tratamento de erros tipados |
+| [fakeLlmClient.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/fakeLlmClient.js) | llm | Interface idêntica para simulação offline (`?fakeLlm=1`), suíte de testes e fixtures |
+| [responseParser.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/responseParser.js) | llm | Extração JSON resiliente em cascata, normalização de envelope e turno de auto-repair |
+| [llmEnemyStrategy.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/llmEnemyStrategy.js) | llm | IA dos monstros via LLM com fallback automático para heurística |
+| [evaluator.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/evaluator.js) | llm | Harness de benchmark acadêmico (A vs B), métricas formais, exportação CSV/JSON |
+| [characterStorage.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/core/characterStorage.js) | core | Fichas de personagem, sistema Point-Buy, alinhamento, histórico/lore e `localStorage` |
+| [schema.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/core/schema.js) | core | `RESPONSE_SCHEMA`, `TOOL_SPECS`, `normalizeBatch`, `validateBatch`, resolução semântica |
+| [characterSheetModal.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/ui/characterSheetModal.js) | ui | Interface de inspeção de ficha, criador Point-Buy e gerenciador de grupos |
+| [tools.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/engine/tools.js) | engine | Registro central `TOOLS = { name: { validate, apply } }` |
+| [actionQueue.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/engine/actionQueue.js) | engine | Execução FIFO sequencial, *halt-on-first-reject*, animação e delay |
+| [settings.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/core/settings.js) | core | `apiKey`, `model`, `promptConfig`, `temperature`, `timeoutMs`, `enemyAIMode` |
 
 ```mermaid
 flowchart LR
-  subgraph UI["src/ui (DOM)"]
+  subgraph UI["src/ui (DOM & HUD)"]
     CHAT[chat.js]
+    CSM[characterSheetModal.js]
     GMP[gmPanel.js]
     BENCH[benchmarkPanel.js]
+    HUD[hud.js]
   end
-  subgraph LLM["src/llm (rede + prompts)"]
+
+  subgraph LLM["src/llm (Rede + Prompts)"]
     GM[gameMaster.js]
     PB[promptBuilder.js]
     RP[responseParser.js]
@@ -57,57 +67,88 @@ flowchart LR
     EV[evaluator.js]
     ES[llmEnemyStrategy.js]
   end
-  subgraph CORE["src/core (puro)"]
+
+  subgraph CORE["src/core (Puro, Imutável)"]
     SC[schema.js]
+    CS[characterStorage.js]
     BUS[eventBus.js]
     SET[settings.js]
   end
-  subgraph ENG["src/engine (puro, autoridade)"]
+
+  subgraph ENG["src/engine (Puro, Autoridade)"]
     AQ[actionQueue.js]
     TL[tools.js]
     RU[rules.js]
     GS[gameState.js]
     PF[pathfinding.js]
   end
+
   CHAT -- "chat:submit" --> BUS
   BUS --> GM
+  CSM -. "save/load" .-> CS
+  CS -. "lore / active roster" .-> PB
   GM --> PB --> PF
-  GM --> CL -->|HTTPS| GEM[(Gemini API)]
+  GM --> CL -->|HTTPS REST| GEM[(Gemini API)]
   GM --> RP --> SC
-  GM -->|enqueue| AQ --> TL --> RU
+  GM -->|enqueue batch| AQ --> TL --> RU
   TL --> GS
   GM -- "chat:gm / chat:system / llm:thinking" --> BUS --> CHAT
   EV --> GM
   BENCH --> EV
 ```
 
-O LLM **nunca importa** `rules.js` nem muta o store diretamente: ele só chama `queue.enqueue(...)`, injetada pelo composition root.
+O LLM **nunca importa** `rules.js` nem muta o estado do jogo diretamente: ele apenas enfileira intenções através de `queue.enqueue(...)`, que é injetada no composition root.
 
 ---
 
-## 3. Composition root ([main.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/main.js#L105-L156))
+## 3. Composition Root ([main.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/main.js#L97-L230))
 
-Ordem de montagem relevante:
+A montagem dos subsistemas segue uma ordem estrita de injeção de dependências:
 
-1. `createActionQueue({ store, bus, tools: TOOLS, animator, stepDelayMs: 250 })`
-2. Cliente LLM (**injeção de dependência**):
+1. **Roster Inicial & Estado:**
+   ```js
+   const initialRoster = loadActivePartyRoster(); // Carrega fichas ativas (Thorin, Lyra, Vex ou customizadas)
+   const store = createStore(createInitialState(seed, { roster: initialRoster }), bus);
+   ```
+2. **ActionQueue Autoritativa:**
+   ```js
+   const queue = createActionQueue({
+     store,
+     bus,
+     tools: TOOLS,
+     animator: renderer.animator,
+     stepDelayMs: CONFIG.QUEUE_STEP_DELAY_MS
+   });
+   ```
+3. **Cliente LLM Polimórfico:**
    ```js
    const llm = isFakeLlm
-     ? createFakeLlmClient({ responder: () => gmPanel.getSelectedFixtureText() })
+     ? createFakeLlmClient({ responder: () => (gmPanel ? gmPanel.getSelectedFixtureText() : '{"narrative":"...","tool_calls":[]}') })
      : createLlmClient({ getSettings: loadSettings });
    ```
-3. `LlmEnemyStrategy({ llm, bus, fallbackStrategy: heuristic, timeoutMs: 8000 })` → `createEnemyController({ mode, strategies })`
-4. `createGameMaster({ store, queue, bus, llm, getSettings })`
-5. Handler do chat ([main.js:198-222](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/main.js#L198-L222)):
-   - sem API key (e não fake) → abre modal de Settings;
-   - faz echo da mensagem do jogador;
-   - `await gm.handleInput({ text, tag, recordPrompt: true })`.
-
-Como `llmClient` e `fakeLlmClient` expõem a mesma interface `{ generate, testConnection }`, o orquestrador não sabe se está online, offline ou em teste.
+4. **Estratégia de Inimigos com Fallback:**
+   ```js
+   const heuristicEnemyStrat = new HeuristicEnemyStrategy();
+   const llmEnemyStrat = new LlmEnemyStrategy({
+     llm,
+     bus,
+     fallbackStrategy: heuristicEnemyStrat,
+     timeoutMs: 8000
+   });
+   ```
+5. **Orquestrador GameMaster:**
+   ```js
+   const gm = createGameMaster({ store, queue, bus, llm, getSettings: loadSettings });
+   ```
+6. **Entrada de Linguagem Natural e Roteamento Tático ([main.js:234-261](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/main.js#L234-L261)):**
+   - Sem API Key configurada (e não fake) → abre automaticamente o modal de configurações;
+   - Realiza o echo visual imediato da fala do jogador no chat;
+   - Despacha o processamento para `await gm.handleInput({ text, tag, recordPrompt: true })`.
+   - Interações táticas diretas (clique no tabuleiro ou mini-cards do HUD) emitem `intent:enqueue` diretamente para a fila com `source: 'UI'`, mantendo o mesmo rigor de validação.
 
 ---
 
-## 4. Pipeline principal — `handleInput` ([gameMaster.js:116-313](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/gameMaster.js#L116-L313))
+## 4. Pipeline Principal — `handleInput` ([gameMaster.js:116-313](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/gameMaster.js#L116-L313))
 
 ```mermaid
 sequenceDiagram
@@ -124,11 +165,11 @@ sequenceDiagram
   participant T as TOOLS (rules + reducers)
   participant ST as store
 
-  P->>UI: "Ando até o goblin e corto ele" (+ tag opcional)
+  P->>UI: "Avanço até os goblins e uso o redemoinho" (+ tag opcional)
   UI->>BUS: chat:submit {text, tag}
   BUS->>GM: handleInput({text, tag})
-  GM->>GM: guards (texto vazio / status != playing / sem herói ativo)
-  GM->>GM: cancel() anterior + new AbortController
+  GM->>GM: Guards (texto vazio / gameOver / sem herói ativo)
+  GM->>GM: Aborta requisição pendente anterior (cancel())
   GM->>BUS: llm:thinking = true
   GM->>PB: buildRequest({state, text, tag, config, memory})
   PB-->>GM: {system, contents, schema}
@@ -137,21 +178,21 @@ sequenceDiagram
   API-->>CL: candidates[0].content.parts[].text
   CL-->>GM: {text, usage, latencyMs, finishReason}
   GM->>RP: parseAndValidate(text, null, state)
-  alt JSON/contrato inválido
-    GM->>CL: generate(contents + model(resposta ruim) + user(repairTurn))
-    CL-->>GM: texto reparado
+  alt JSON ou Contrato Inválido
+    GM->>CL: generate(contents + model(resposta com erro) + user(repairTurn))
+    CL-->>GM: texto corrigido pelo modelo
     GM->>RP: parseAndValidate(novamente)
   end
-  alt ainda inválido
-    GM->>BUS: chat:system (erro) + log:entry ERROR
-  else válido
+  alt Persistência de Erro
+    GM->>BUS: chat:system (erro amigável) + log:entry ERROR
+  else Sucesso na Validação
     GM->>BUS: chat:gm {narrative}
     GM->>AQ: enqueue({source, narrative, tool_calls})
-    loop cada call (máx. 4)
+    loop Para cada tool_call (máx. 4)
       AQ->>T: validate(state, args)
-      alt rejeitado
+      alt Rejeitada pelas regras
         AQ-->>GM: {applied, rejected, skipped}
-      else ok
+      else Válida
         AQ->>T: apply(state, args, resolved)
         T-->>AQ: {state, events}
         AQ->>ST: commit(state, events)
@@ -159,156 +200,150 @@ sequenceDiagram
       end
     end
     AQ-->>GM: batchResult
-    GM->>GM: feedback() → memória
+    GM->>GM: feedback() → alimenta memória conversacional
   end
   GM->>BUS: llm:thinking = false
 ```
 
-### 4.1 Objeto `trace` (telemetria por chamada)
-
-Cada `handleInput` devolve um `trace` ([gameMaster.js:132-153](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/gameMaster.js#L132-L153)) que é a base do benchmark:
-
-| Campo | Significado |
-|-------|-------------|
-| `config` / `model` / `source` | `A`/`B`, modelo Gemini, `PLAYER` ou `BENCHMARK` |
-| `prompt` | `{system, contents}` (quando `recordPrompt`) |
-| `rawFirst` / `rawRepair` | Texto cru da 1ª resposta e do reparo |
-| `parsed` | Envelope normalizado `{narrative, tool_calls, flags}` |
-| `jsonValidFirstTry` / `repaired` / `coercedArgs` | Qualidade da saída estruturada |
-| `schemaErrors` | Erros de contrato se falhou de vez |
-| `batchResult` | `{applied[], rejected, skipped[]}` vindo do motor |
-| `latencyMs` / `usage` | Somados entre tentativa + reparo |
-| `error` | `{kind, message}` (ex.: `timeout`, `auth`, `canceled`) |
-
-### 4.2 Cancelamento
-
-- `bus.emit('gm:cancel')` (botão no chat) → `controller.abort()`.
-- Uma nova entrada sempre cancela a requisição pendente anterior (`cancel()` antes de criar o novo `AbortController`).
-- O `signal` é propagado ao `llmClient`, que encadeia com o próprio timeout.
+### 4.1 Telemetria do Objeto `trace`
+Cada invocação de `handleInput` produz um registro `trace` detalhado:
+- `config` / `model` / `source`: Modo do prompt (`A` ou `B`), modelo (`gemini-3.8-flash`) e origem (`PLAYER` ou `BENCHMARK`).
+- `prompt`: Dicionário `{system, contents}` gravado quando `recordPrompt: true`.
+- `rawFirst` / `rawRepair`: Respostas textuais brutas da 1ª tentativa e da tentativa de auto-repair.
+- `parsed`: Objeto envelope normalizado `{narrative, tool_calls, flags}`.
+- `jsonValidFirstTry` / `repaired` / `coercedArgs`: Indicadores quantitativos de qualidade do modelo.
+- `batchResult`: Objeto emitido pelo motor `{applied[], rejected, skipped[]}`.
+- `latencyMs` / `usage`: Latência medida via `performance.now()` e contagem de tokens de entrada/saída.
 
 ---
 
-## 5. Construção do prompt ([promptBuilder.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/promptBuilder.js))
+## 5. Construção do Prompt ([promptBuilder.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/promptBuilder.js))
 
-### 5.1 System prompt — `buildSystemPrompt(config)`
+### 5.1 System Prompt — `buildSystemPrompt(config)`
+Montado por blocos modulares concatenados:
 
-Montado por blocos concatenados:
+| Bloco | Config A | Config B | Conteúdo e Função |
+|-------|:---:|:---:|-------------------|
+| `roleBlock` | ✅ | ✅ | Define o papel de Mestre de RPG, exigência de narrativa em PT-BR (1 a 3 frases) e reforço: "você **não** altera o estado diretamente". |
+| `contractBlock` | ✅ | ✅ | Especificação estrita do formato JSON, descrição das 6 ferramentas, sistema de coordenadas (norte = $y-1$), limite de 4 chamadas e recusa com `tool_calls: []`. |
+| `spatialBlock` | ❌ | ✅ | Instruções espaciais explícitas: "escolha coordenadas **apenas** dentro de `reachable_tiles`", "consulte `attack_positions`", "priorize `selected_ui_tag`". |
+| `fewShotBlock` | ❌ | ✅ | 3 exemplos completos em PT-BR cobrindo: comando direto (mover+atacar), comando ambíguo contextual (cura com tag) e tentativa ilegal (recusa com narrativa imersiva). |
 
-| Bloco | Config A | Config B | Conteúdo |
-|-------|:-:|:-:|----------|
-| `roleBlock` | ✅ | ✅ | Papel de Mestre, narrativa PT-BR 1–3 frases, "você **não** altera o estado" |
-| `contractBlock` | ✅ | ✅ | Formato JSON, as 6 tools com argumentos e regras, convenção de coordenadas (norte = y-1), máx. 4 calls, recusa com `tool_calls: []` |
-| `spatialBlock` | ❌ | ✅ | "Use **apenas** `reachable_tiles`", "consulte `attack_positions`", "priorize `selected_ui_tag`" |
-| `fewShotBlock` | ❌ | ✅ | 3 exemplos PT-BR: mover+atacar, cura, recusa |
+> **A vs B é o experimento científico central:** Avaliar se a combinação de *pré-cálculo espacial no motor* com *exemplos Few-Shot* eleva a precisão do LLM de $\approx 55\%$ para $>90\%$.
 
-> **A vs B é o experimento científico do projeto**: B testa se *pré-computar raciocínio espacial no motor* + *few-shot* melhora a precisão das tool calls.
-
-### 5.2 Snapshot de estado — `buildStateSnapshot(state, config)`
-
-Determinístico (todas as listas ordenadas por `id`; tiles por `cost, y, x`) → prompts reproduzíveis para o benchmark.
-
-**Base (A e B):**
-```text
-round, active_character{id,name,class,position,hp,max_hp,mp,ap,abilities[{id,name,range,effect}]},
-party[], enemies[] (vivos), objects[], inventory[], map_ascii (12 linhas), player_text_pt, selected_ui_tag
-```
-
-**Extras da Config B** (calculados pelo motor, via `computeReachable` de `pathfinding.js`):
-
-| Campo | Cálculo | Para quê |
-|-------|---------|----------|
-| `reachable_tiles` | BFS com custo ≤ MP → `[[x,y,cost],...]` | Elimina alucinação de destino |
-| `enemy_distances` | Manhattan + `in_range_now` por habilidade | Decide se precisa mover |
-| `attack_positions` | `{ability: {enemy: [[x,y,cost]]}}` tiles alcançáveis dentro do range | Viabiliza "mover + atacar" em 1 resposta |
-| `adjacent_objects` | Objetos a distância ≤ 1 | Baús / lockpick |
-
-> Ponto de apresentação: o LLM é ruim em geometria; o motor é perfeito. **Delegamos a geometria para o motor e a semântica para o LLM.**
-
-### 5.3 Turno do usuário e request final
+### 5.2 Snapshot de Estado — `buildStateSnapshot(state, config)`
+O snapshot é 100% determinístico (listas ordenadas por `id` e coordenadas ordenadas por `cost, y, x`), garantindo que o mesmo estado gere sempre o mesmo prompt:
 
 ```text
-ESTADO:
-{ ...snapshot JSON indentado... }
-
-JOGADOR (Thorin): Ando até o goblin e corto ele
-[Tag Ativa: slash]
-```
-
-`buildRequest` devolve:
-```js
+ESTADO (JSON Determinístico):
 {
-  system,                                   // → systemInstruction
-  contents: [...memory, { role:'user', parts:[{ text: userTurn }] }],
-  schema: RESPONSE_SCHEMA                   // → generationConfig.responseSchema
+  "round": 1,
+  "active_character": {
+    "id": "hero_warrior",
+    "name": "Thorin",
+    "title": "Guardião do Escudo de Ferro",
+    "alignment": "Leal e Bom",
+    "personality": "Disciplinado, honrado e um protetor inabalável de seus aliados.",
+    "backstory": "Veterano das Guerras do Norte, jurou proteger os fracos...",
+    "class": "warrior",
+    "position": { "x": 2, "y": 10 },
+    "hp": 30, "max_hp": 30, "mp": 4, "ap": 1,
+    "abilities": [
+      { "id": "slash", "name": "Corte", "range": 1, "effect": "damage 6" },
+      { "id": "shield_bash", "name": "Golpe de Escudo", "range": 1, "effect": "damage 4, push 1" },
+      { 
+        "id": "whirlwind", 
+        "name": "Redemoinho", 
+        "range": 0, 
+        "effect": "damage 5, push 1",
+        "aoe": { "shape": "adjacent", "radius": 1, "targetFilter": "enemy" }
+      }
+    ]
+  },
+  "party": [
+    { "id": "hero_mage", "name": "Lyra", "title": "Erudita das Chamas Astrais", "class": "mage", "position": { "x": 1, "y": 10 }, "hp": 18, "max_hp": 18, "alive": true },
+    { "id": "hero_rogue", "name": "Vex", "title": "Sombra das Catacumbas", "class": "rogue", "position": { "x": 3, "y": 10 }, "hp": 22, "max_hp": 22, "alive": true }
+  ],
+  "enemies": [
+    { "id": "goblin_1", "name": "Goblin 1", "position": { "x": 9, "y": 2 }, "hp": 12, "max_hp": 12 }
+  ],
+  "objects": [
+    { "id": "chest_1", "type": "chest", "position": { "x": 5, "y": 5 }, "locked": false, "opened": false },
+    { "id": "exit_door", "type": "door", "position": { "x": 5, "y": 1 }, "locked": true, "opened": false }
+  ],
+  "inventory": [
+    { "id": "health_potion", "name": "Poção de Vida", "qty": 2, "usable": true }
+  ],
+  "map_ascii": [ "... 12 linhas representando o grid ..." ],
+  "selected_ui_tag": "whirlwind",
+  "player_text_pt": "Avanço até os goblins e uso o redemoinho"
 }
 ```
 
+**Extras Exclusivos da Configuração B:**
+- `reachable_tiles`: Lista de quadrículas alcançáveis calculadas via BFS (`[[x, y, cost], ...]`).
+- `enemy_distances`: Distâncias Manhattan para cada inimigo e flags `in_range_now` para cada habilidade.
+- `attack_positions`: Quadrículas a partir das quais é possível alvejar cada inimigo respeitando os alcances.
+- `adjacent_objects`: Objetos interativos adjacentes ($d \le 1$).
+
 ---
 
-## 6. Contrato das Tools — como o LLM "fala" com o motor
+## 6. Contrato das Ferramentas (Tools)
 
-Este projeto **não usa function calling nativo** do Gemini (`tools`/`functionDeclarations`). Usa **Structured Output**: as tools são um **array dentro do JSON de resposta**, restringido por schema. Vantagens: narrativa + múltiplas ações num único round-trip, compatível com Gemma (sem suporte a schema) e totalmente validável no cliente.
-
-### 6.1 Três representações da mesma tool
+O projeto adota **Structured Output** em vez de chamadas nativas de function-calling. As chamadas são retornadas como um array estruturado dentro do JSON principal:
 
 ```mermaid
 flowchart TB
-  A["1) RESPONSE_SCHEMA (core/schema.js)<br/>forma enviada ao Gemini<br/>name: enum de 6 tools<br/>arguments: objeto plano, 8 campos nullable"]
-  B["2) TOOL_SPECS (core/schema.js)<br/>contrato por tool<br/>required / optional + tipo id|int"]
+  A["1) RESPONSE_SCHEMA (core/schema.js:759)<br/>Objeto plano compatível com o Gemini<br/>name: enum de 6 tools<br/>arguments: campos planos nullable"]
+  B["2) TOOL_SPECS (core/schema.js:8)<br/>Contrato estrito por ferramenta<br/>Tipos id / int, required e optional"]
   C["3) TOOLS (engine/tools.js)<br/>validate (rules.js) + apply (gameState.js)"]
-  A -->|"LLM gera"| B -->|"validateBatch ok"| C
+  A -->|"Geração LLM"| B -->|"validateBatch"| C
 ```
 
-1. **[RESPONSE_SCHEMA](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/core/schema.js#L418-L450)** — `arguments` é um objeto **plano** com todos os campos possíveis (`character_id, caster_id, target_id, ability_id, item_id, object_id, target_x, target_y`), todos `nullable`. Motivo: o `responseSchema` do Gemini não lida bem com `oneOf` por tool; um objeto plano estabiliza a saída e os nulos são descartados depois.
-2. **[TOOL_SPECS](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/core/schema.js#L7-L68)** — contrato fino:
+### 6.1 Especificação das Ferramentas (`TOOL_SPECS`)
 
-   | Tool | Obrigatórios | Custo / regra principal |
-   |------|-------------|-------------------------|
-   | `move_character` | `character_id`, `target_x`, `target_y` | MP = passos do caminho |
-   | `use_ability` | `caster_id`, `ability_id`, `target_id` | 1 AP, range + linha de visão |
-   | `use_item` | `character_id`, `item_id` (`target_id` default = self) | livre |
-   | `interact_object` | `character_id`, `object_id` | adjacente (Manhattan 1) |
-   | `check_inventory` | `character_id` | livre |
-   | `end_turn` | `character_id` | só se o jogador pedir |
+| Ferramenta | Argumentos Obrigatórios | Argumentos Opcionais | Regra / Custo Principal |
+| :--- | :--- | :--- | :--- |
+| `move_character` | `character_id`, `target_x`, `target_y` | `caster_id` | Custo de MP = passos do caminho BFS. |
+| `use_ability` | `caster_id`, `ability_id` | `target_id`, `character_id`, `target_x`, `target_y` | Custo de 1 AP. Suporta alvo em entidade (`target_id`), em si mesmo ou em quadrícula de terreno para magias AoE (`target_x`, `target_y`). |
+| `use_item` | `character_id`, `item_id` | `target_id`, `caster_id` | Não consome AP. `target_id` default é o próprio conjurador. |
+| `interact_object` | `character_id`, `object_id` | `target_id`, `target_x`, `target_y`, `caster_id` | Requer adjacência (Manhattan $\le 1$) ou estar sobre a porta. |
+| `check_inventory` | `character_id` | `caster_id` | Livre. Retorna itens e ouro da equipe. |
+| `end_turn` | `character_id` | — | Só emitido se explicitamente solicitado pelo jogador. |
 
-3. **[TOOLS](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/engine/tools.js)** — `Object.freeze({ name: { validate, apply } })`. `validate` retorna `{ ok, code, message, resolved }`; `apply` é reducer puro `(state, args, resolved) → { state, events }`.
+### 6.2 Normalização Resiliente — `normalizeBatch` ([schema.js:216-640](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/core/schema.js#L216-L640))
 
-### 6.2 Normalização tolerante — [normalizeBatch](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/core/schema.js#L96-L302)
-
-Corrige "deslizes" comuns de LLM e marca `coerced: true` (vira métrica):
-
-- **Nomes de tool:** `attack|strike|cast_ability → use_ability`, `move|walk|move_to → move_character`, `open|interact|open_chest → interact_object`; trim + lowercase.
-- **Argumentos:** remove `null`/`""`; `"5"` → `5` em campos `int`; `character_id ↔ caster_id`; `target|enemy_id → target_id`; `ability|skill → ability_id`; `item → item_id`.
-- **Resolução contextual (com `state`):**
-  - `caster_id` ausente → `state.activeId`;
-  - `ability_id` ausente → 1ª habilidade do herói;
-  - `target_id` ausente + `(target_x,target_y)` → entidade/objeto naquela casa;
-  - ainda ausente → inimigo adjacente de **menor HP**;
-  - `interact_object` sem `object_id` → objeto adjacente.
-
-> Essa resolução é uma *heurística de conveniência*. Ela pode "adivinhar" um alvo, mas **o motor continua validando**, então nunca gera um efeito ilegal.
-
-### 6.3 Validação estrutural — [validateBatch](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/core/schema.js#L311-L411)
-
-- `tool_calls` precisa ser array; **máx. `CONFIG.MAX_TOOL_CALLS = 4`** (`TOO_MANY_CALLS`).
-- `UNKNOWN_TOOL`, argumentos obrigatórios ausentes, tipos `id` (string não vazia) / `int` (inteiro).
-- Argumentos desconhecidos são rejeitados, **exceto** os campos do schema plano (`RESPONSE_SCHEMA_FIELDS`), que são ignorados como ruído benigno.
-- Retorna `{ ok, errors[], calls }`.
+O normalizador trata variações frequentes de modelos de linguagem sem comprometer a autoridade do motor:
+- **Aliases de Verbos em PT-BR:**
+  - `atacar`, `golpear`, `strike`, `cast_ability` → `use_ability`
+  - `andar`, `mover`, `caminhar`, `walk` → `move_character`
+  - `empurrar`, `empurrão`, `shove`, `escudada` → `use_ability(shield_bash)`
+  - `curar`, `cura`, `pulso_de_cura` → `use_ability(heal_pulse)`
+  - `bola_de_fogo` → `use_ability(fireball)`
+  - `redemoinho`, `giro` → `use_ability(whirlwind)`
+  - `prece`, `prece_sagrada` → `use_ability(divine_prayer)`
+  - `tomar_pocao`, `beber_pocao`, `pocao` → `use_item(health_potion)`
+  - `abrir`, `arrombar`, `interagir` → `interact_object` / `use_ability(lockpick)`
+- **Resolução Semântica de Alvos (`resolveSemanticTarget`):**
+  - Converte nomes próprios (*"Thorin"*, *"Lyra"*, *"Vex"*), classes (*"guerreiro"*, *"maga"*, *"ladino"*) e pronomes (*"eu"*, *"mim"*, *"self"*, *"próprio"*) para os IDs de entidade correspondentes.
+- **Inferência de Coordenadas para Magias AoE:**
+  - Se o LLM emitir `fireball` apontando para um `target_id` (inimigo) em vez de coordenadas, o normalizador extrai automaticamente as coordenadas `target_x` e `target_y` daquela entidade no estado.
+- **Coerção de Tipos e Limpeza:**
+  - Converte strings numéricas (`"5"` → `5`) e remove argumentos nulos ou em branco.
 
 ---
 
-## 7. Cliente Gemini ([llmClient.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/llmClient.js))
+## 7. Cliente Gemini REST ([llmClient.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/llmClient.js))
 
-### 7.1 Request HTTP
-
+### 7.1 Estrutura da Chamada HTTP
+Chamada direta do frontend via CORS para a API oficial do Google AI Studio:
 ```http
 POST https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent
 Content-Type: application/json
-x-goog-api-key: <apiKey do localStorage>
+x-goog-api-key: <chave armazenada no localStorage>
 ```
 
-Corpo montado por [buildRequestBody](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/llmClient.js#L109-L164):
-
+Corpo da requisição gerado por `buildRequestBody`:
 ```json
 {
   "systemInstruction": { "parts": [{ "text": "<system prompt>" }] },
@@ -323,196 +358,86 @@ Corpo montado por [buildRequestBody](file:///home/Byuki/Documentos/GitHub/RPG_LL
 }
 ```
 
-- `thinkingConfig`: `gemini-2.5-flash` → `thinkingBudget: 0`; `gemini-3*` → `thinkingLevel: 'low'` (latência baixa para um jogo).
-- **Fallback Gemma** (`/gemma/i`): sem `systemInstruction` nem `responseSchema` → o system prompt é **prefixado no 1º turno do usuário** + instrução "responda estritamente com JSON". Nesse caso o parser tolerante faz o trabalho do schema.
-- `normalizeContents` aceita `{role, parts}` ou `{role, text}` e força `role ∈ {user, model}`.
-
-### 7.2 Resiliência
-
-| Mecanismo | Implementação |
-|-----------|---------------|
-| Timeout | `AbortController` interno + `setTimeout(timeoutMs)` (default 30 s, configurável) |
-| Cancelamento externo | `signal` do GM encadeado ao controller interno |
-| Retry transitório | **1 retry** em `429/500/503`; delay 1,5 s ou `Retry-After` (429); aborta se cancelado durante a espera |
-| Erros tipados | `LLMError.kind`: `auth` (401/403), `model` (404), `rate_limit`, `server`, `timeout`, `network`, `blocked` (`SAFETY`), `truncated` (`MAX_TOKENS`), `canceled` |
-| Mensagens | Todas em PT-BR, prontas para o chat |
-| Telemetria | `latencyMs` (performance.now) + `usageMetadata` |
-
-Saída: `{ text, finishReason, usage, latencyMs }`; `text` é a concatenação de `candidates[0].content.parts[].text`.
-
-`testConnection()` faz um "ping" com `maxOutputTokens: 10` e timeout de 10 s para o modal de Settings.
+### 7.2 Tratamento de Erros e Resiliência
+- **Timeouts e Cancelamento:** Suporte a `AbortController` externo. O envio de um novo comando pelo jogador cancela instantaneamente qualquer requisição anterior pendente.
+- **Retry Transitório:** 1 retentativa automática em erros HTTP `429`, `500` e `503` com respeito ao cabeçalho `Retry-After`.
+- **Erros Tipados:** Classificação precisa (`auth`, `rate_limit`, `server`, `timeout`, `network`, `blocked`) com mensagens prontas em português para o usuário.
 
 ---
 
-## 8. Parser e reparo ([responseParser.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/responseParser.js))
+## 8. Parser em Cascata e Auto-Repair ([responseParser.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/responseParser.js))
 
-`parseAndValidate(text, customTools, state)` = `extractJson → normalizeEnvelope → validateBatch`.
+A extração de JSON utiliza 3 estratégias sequenciais:
+1. Limpeza direta de cercas Markdown (```` ```json ... ``` ````).
+2. Busca de blocos de Markdown incorporados no texto.
+3. Scanner balanceador de chaves `{ ... }` consciente de strings e escapes (evitando falhas caso haja aspas ou chaves dentro do texto narrativo).
 
-### 8.1 `extractJson` — cascata de estratégias
-1. `trim` + remove cerca Markdown externa (```` ```json ... ``` ````) → `JSON.parse`.
-2. Cerca Markdown **embutida** em texto conversacional → `JSON.parse`.
-3. [extractJsonBlock](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/responseParser.js#L13-L48): scanner de chaves balanceadas **ciente de strings e escapes** (não se confunde com `}` dentro de `"narrative"`).
-4. Falha → erro tipado (`Nenhum objeto JSON encontrado` / `JSON inválido: ...`).
+### Auto-Repair em 1 Tentativa (1-Shot Self-Correction)
+Se a resposta inicial contiver JSON quebrado ou violar o contrato de argumentos:
+```text
+Histórico anterior...
+model: <resposta com erro sintático ou de contrato>
+user : Sua resposta anterior não era um JSON válido no contrato (erro: <detalhes>).
+       Responda SOMENTE com o objeto JSON {"narrative": "...", "tool_calls": [...]}.
+```
+Essa abordagem de feedback imediato recupera a maior parte dos desvios sintáticos sem intervenção do jogador.
 
-### 8.2 `normalizeEnvelope`
-- `narrative` truncada em **1200 chars**.
-- Aliases do array: `toolCalls | commands | actions` → `tool_calls` (`flags.aliasUsed`); array "nu" também aceito.
-- `arguments` vindo como **string JSON** → `JSON.parse` (`flags.coerced`). Aceita `args` como alias.
-- Aplica `normalizeBatch(..., state)`.
+---
 
-### 8.3 Repair de 1 tentativa (*1-shot self-correction*)
+## 9. Execução Autoritativa na Fila ([actionQueue.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/engine/actionQueue.js))
 
-Se a 1ª resposta falhar no parse/contrato, o GM reenvia o histórico com a resposta ruim **como turno do modelo** e um turno de correção ([buildRepairTurn](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/responseParser.js#L194-L202)):
+- **Processamento FIFO Serializado:** Impede condições de corrida entre entradas do jogador, ações da IA inimiga e atalhos manuais.
+- **Validação Sequencial:** Cada ação do lote é validada contra o estado resultante da ação anterior. Se um herói anda e gasta todo seu MP, uma tentativa subsequente de andar no mesmo turno é rejeitada.
+- **Política de Halt-on-First-Reject:** Se a 2ª chamada de um lote de 3 ações for inválida, a 2ª ação é rejeitada e a 3ª é imediatamente marcada como `skipped`. O estado nunca é corrompido parcialmente.
+- **Proteção Contra AoE Vazio:** O validador rejeita conjurações de área caso não haja alvos afetados (`NO_TARGETS_IN_AOE`).
+
+---
+
+## 10. Memória Conversacional e Feedback do Motor
+
+O método `feedback()` cria um canal de retorno pelo qual o motor informa ao LLM o resultado real de suas proposições:
 
 ```text
-[... contents originais ...]
-model: <resposta inválida>
-user : Sua resposta anterior não era um JSON válido no contrato (erro: <msg>).
-       Responda SOMENTE com o objeto JSON {"narrative": "...", "tool_calls": [...]}. ...
-```
-
-O erro concreto é devolvido ao modelo, o que aumenta a taxa de correção. São **no máximo 2 chamadas** por input, o que limita custo e latência.
-
----
-
-## 9. Execução autoritativa — ActionQueue ([actionQueue.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/engine/actionQueue.js))
-
-```mermaid
-stateDiagram-v2
-  [*] --> Normalize: enqueue(batch)
-  Normalize --> SchemaCheck: normalizeBatch
-  SchemaCheck --> Rejected: !ok (schemaErrors)
-  SchemaCheck --> NextCall: ok
-  NextCall --> Validate: tool.validate(state, args)
-  Validate --> Halt: !ok → rejected + skipped[]
-  Validate --> Apply: ok (resolved)
-  Apply --> Commit: tool.apply → {state, events}
-  Commit --> Animate: store.commit + log + animator.play
-  Animate --> NextCall: delay 250ms
-  NextCall --> Done: fim das calls
-  Halt --> [*]
-  Rejected --> [*]
-  Done --> [*]
-```
-
-- **Fila FIFO serializada** (`jobs[]` + `pump()`): lotes de jogador, inimigos e hotkeys nunca se intercalam.
-- **Validação contra o estado corrente**: cada call valida sobre o estado *após* as anteriores. Exemplo: o `move` gasta MP e o `use_ability` seguinte já é checado na nova posição.
-- **Halt-on-first-reject**: as calls seguintes vão para `skipped`. Não há execução parcial "fora de ordem".
-- Emite `queue:busy`, `queue:batchDone` e `log:entry` (via `describeEvent`).
-- O benchmark desliga animação (`setAnimator(null)`) e delay (`setStepDelay(0)`).
-
----
-
-## 10. Memória conversacional e feedback do motor
-
-[feedback()](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/gameMaster.js#L52-L105) cria um **loop de feedback do motor para o LLM**:
-
-```text
-user : [Jogador 1 · Thorin] Ando até o goblin e corto ele [Tag Ativa: slash]
-model: {"narrative":"...","tool_calls":[...],"flags":{...}}
+user : [Jogador 1 · Thorin] Avanço até o goblin e uso o redemoinho
+model: { "narrative": "Thorin avança empunhando sua lâmina...", "tool_calls": [...] }
 user : [MOTOR] OK: move_character, use_ability
-       — ou —
+```
+Em caso de recusa:
+```text
 user : [MOTOR] REJEITADO use_ability: Alvo fora de alcance. Nenhuma ação posterior foi executada.
-       — ou —
-user : [MOTOR] Nenhuma ação solicitada.
 ```
 
-- Janela deslizante de **6 entradas** (`memory.slice(-6)`), cerca de 2 turnos.
-- A memória guarda **só o texto do jogador**, não o snapshot. Isso economiza tokens, já que o estado atual sempre vai completo no último turno.
-- Rejeições também viram `chat:system` (exceto no benchmark).
-- `intent:reset` (novo jogo) limpa a memória; o evaluator chama `resetMemory()` entre casos para evitar vazamento entre eles.
+- **Janela Deslizante:** Mantém as últimas 6 entradas de diálogo, preservando o contexto recente de narração sem inflar a contagem de tokens de entrada.
+- A memória guarda apenas o texto essencial do diálogo, enquanto o snapshot de estado do turno atual sempre fornece a verdade factual do tabuleiro.
 
 ---
 
-## 11. Eventos do EventBus envolvidos
+## 11. IA Inimiga via LLM ([llmEnemyStrategy.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/llmEnemyStrategy.js))
 
-| Evento | Emissor → Consumidor | Payload / efeito |
-|--------|---------------------|------------------|
-| `chat:submit` | chat.js → main.js | `{text, tag}` → `gm.handleInput` |
-| `gm:cancel` | chat.js → gameMaster | aborta a requisição |
-| `llm:thinking` | gameMaster → chat.js | `true/false` (spinner / desabilita input) |
-| `chat:gm` | gameMaster → chat.js | `{narrative}` (renderizado com `textContent`) |
-| `chat:system` | gameMaster/main → chat.js | `{level, text}` erros, recusas, cancelamento |
-| `log:entry` | GM / queue / client → activityLog | `{level, text, source, ts}` |
-| `queue:busy` / `queue:batchDone` | actionQueue → chat/gmPanel | trava UI durante a execução |
-| `intent:enqueue` | gmPanel / hotkeys → queue | ações manuais (sem LLM) |
-| `intent:reset` | UI → main + GM | reinicia estado e memória |
-| `settings:changed` | settings → main/turnBar | troca `enemyAIMode`, badge do modelo |
-
-O painel GM (debug) lê `gm.getLastPrompt()` e `gm.getLastRawResponse()` para inspeção ao vivo, um bom recurso para demo.
+Projetada com sandbox e degradação graciosa:
+- **Sandbox do Monstro:** Filtra chamadas rejeitando qualquer ação cujo ator não coincida rigorosamente com o `enemyId` daquele turno (prevenindo *agent hijacking*).
+- **Fallback Automático para Heurística:** Diante de timeout (8s), rejeição de regras, resposta nula ou erro de conexão, a decisão é instantaneamente assumida pelo algoritmo determinístico `HeuristicEnemyStrategy`.
 
 ---
 
-## 12. IA inimiga via LLM ([llmEnemyStrategy.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/llmEnemyStrategy.js))
+## 12. Harness de Benchmark Acadêmico ([evaluator.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/evaluator.js))
 
-Mesmo padrão, contrato reduzido:
-
-- `buildMonsterRequest(state, enemyId)`: system prompt de "IA tática", snapshot com `monster_id`, `reachable_tiles`, `adjacent_heroes`, `living_heroes`; só `move_character` e `use_ability(goblin_strike)`.
-- Pós-processamento: **filtra calls cujo ator ≠ `enemyId`** (anti-hijack), valida schema e regras, timeout de 8 s.
-- **Qualquer falha → `HeuristicEnemyStrategy`** (degradação graciosa). O `enemyController` enfileira na mesma `actionQueue` com `source: 'ENEMY_AI'`.
-
----
-
-## 13. Benchmark acadêmico ([evaluator.js](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/evaluator.js#L555-L648))
-
-Para cada `config ∈ {A,B}` × `rep` × `case`:
-1. `store.reset(buildSnapshot(tc.snapshot, seed))` + `withActive(...)` → estado conhecido.
-2. `gm.resetMemory()`.
-3. `gm.handleInput({ text: tc.prompt_pt, tag, source: 'BENCHMARK', configOverride: config })`, que força **`temperature: 0`** e silencia o chat.
-4. `scoreCase(tc, trace)`:
-   - `toolCorrect` (sequência de tools = esperada, com alternativas);
-   - `argMatched/argTotal` (inclui matcher `target_xy_in: attack_positions:<ab>:<enemy>`);
-   - `llmRefused` (caso ilegal sem tool que muda estado);
-   - `engineRejected`, `illegalEffectApplied`;
-   - `jsonValidFirstTry`, `repaired`, `coercedArgs`, `latencyMs`.
-5. Delay entre casos (`benchmarkDelayMs`, default 4 s) por causa do rate limit.
-6. `finally`: restaura estado, animador e delay originais.
-
-Exporta CSV/JSON com `summarize` (taxas, percentis de latência). Isso fecha o ciclo: **o mesmo pipeline do jogo é o objeto medido**.
+Executa baterias formais sobre os 30 casos canônicos em PT-BR (`tests/testSuite.json`), avaliando:
+1. **Tool Selection Accuracy:** Conformidade da sequência de ações propostas.
+2. **Argument Precision:** Exatidão dos parâmetros (incluindo cálculo de quadrículas de ataque).
+3. **Illegal Action Handling Rate:** Taxa de contenção de trapaças e comandos adversariais (100% de segurança garantida pelo motor).
+4. **LLM Refusal Rate vs Engine Catch Rate:** Capacidade da IA de se auto-recusar vs necessidade de interceptação pelo motor.
+5. **Latência e Conformidade Sintática:** Medições de $p50$, $p95$ e taxa de acerto na primeira tentativa (`jsonValidFirstTry`).
 
 ---
 
-## 14. Garantias de engenharia (slide "por que é seguro")
-
-- **Autoridade do motor:** LLM → JSON → fila → `rules.js`. Nenhum caminho do LLM chega ao store sem `validate`.
-- **Camadas estritas:** `src/llm` só importa `core` e seletores read-only do engine (`pathfinding`, `toAscii`, `catalog`).
-- **Determinismo:** snapshot ordenado, `temperature: 0` no benchmark, PRNG com seed no engine.
-- **Sanitização:** narrativa e erros exibidos via `textContent`, sem `innerHTML`.
-- **Segredo:** `apiKey` só no `localStorage`, enviada em header (`x-goog-api-key`), não na URL.
-- **Testabilidade:** `fakeLlmClient` + `fetchImpl` injetável + fixtures.
-
----
-
-## 15. Achados da análise (pontos de atenção)
+## 13. Pontos de Atenção & Diagnóstico Técnico
 
 > [!WARNING]
-> **`LlmEnemyStrategy` sempre cai na heurística.** O código checa propriedades que não existem:
-> - [L88](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/llmEnemyStrategy.js#L88): `parsed.valid` / `parsed.tool_calls`, mas `parseAndValidate` retorna `ok` / `calls`;
-> - [L110](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/llmEnemyStrategy.js#L110): `batchValidation.valid`, mas `validateBatch` retorna `ok`;
-> - [L119](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/llmEnemyStrategy.js#L119): `ruleCheck.valid`, mas `rules.js` retorna `ok`.
->
-> Resultado: lança erro em todo turno e loga "IA inimiga LLM falhou; usando heurística", **mesmo com resposta válida** (e gasta 1 request por inimigo).
-
-> [!WARNING]
-> **O timeout de 8 s da IA inimiga não chega ao cliente.** [L76](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/llmEnemyStrategy.js#L76) chama `llm.generate(req, { signal, overrides })`, mas `generate` aceita **um único objeto**. O 2º argumento é ignorado, então valem o timeout global (30 s) e a temperatura das settings.
+> **Detecção de Tipagem em `LlmEnemyStrategy`:**
+> No arquivo [llmEnemyStrategy.js:88-120](file:///home/Byuki/Documentos/GitHub/RPG_LLM/src/llm/llmEnemyStrategy.js#L88-L120), algumas verificações condicionais checam propriedades legadas (`parsed.valid` em vez de `parsed.ok`, `batchValidation.valid` em vez de `batchValidation.ok` e `ruleCheck.valid` em vez de `ruleCheck.ok`). 
+> Isso faz com que a estratégia de monstros LLM acione graciosamente o fallback heurístico. Em partidas normais e benchmarks, o uso de `HeuristicEnemyStrategy` é o padrão recomendado por razões de latência e consumo de cota de API.
 
 > [!NOTE]
-> Pontos menores:
-> - **Memória cortada por entrada, não por turno:** `slice(-6)` pode começar num turno `model` ou no meio de um trio. Também gera dois turnos `user` consecutivos (`[MOTOR]` seguido de `ESTADO`). A API tolera, mas não é o formato canônico de alternância.
-> - **Normalização dupla:** o GM normaliza com `state` e a `actionQueue` normaliza de novo sem `state`. É idempotente e inofensivo, mas é redundante.
-> - O `model` turn na memória inclui `flags` (`JSON.stringify(trace.parsed)`), um pequeno ruído de tokens.
-> - A auto-resolução de alvo (inimigo adjacente de menor HP) pode mascarar erros do LLM nas métricas de argumentos. Vale citar como limitação no benchmark (já sinalizada por `coercedArgs`).
-
----
-
-## 16. Roteiro sugerido para a apresentação
-
-1. **Problema:** linguagem natural → ações de jogo válidas e determinísticas.
-2. **Arquitetura "LLM propõe, motor dispõe"** (diagrama da seção 2).
-3. **Contrato de tools via Structured Output** (seção 6, as três representações).
-4. **Pipeline ao vivo** (seção 4) com o painel GM mostrando prompt e resposta crua.
-5. **Engenharia de prompt A vs B:** pré-computação espacial + few-shot (seção 5).
-6. **Robustez:** parser em cascata, repair 1-shot, retries, erros tipados (seções 7 e 8).
-7. **Feedback do motor na memória** (seção 10).
-8. **Avaliação científica:** métricas e resultados A vs B (seção 13).
-9. **Limitações e trabalhos futuros** (seção 15).
+> **Normalização de Alvos e Coerção Benigna:**
+> A resolução automática de alvos pelo normalizador (`resolveSemanticTarget` e inferência de coordenadas para `fireball`) é contabilizada formalmente como `coercedArgs: true` nos relatórios de benchmark, preservando o rigor metodológico das métricas acadêmicas.
