@@ -8,14 +8,17 @@ Construído sob restrições arquiteturais estritas: **Web pura (Vanilla ES6 JS,
 
 ## 📋 Sumário
 1. [Visão Geral e Arquitetura](#-visão-geral-e-arquitetura)
-2. [Como Executar Localmente](#-como-executar-localmente)
-3. [Configuração da API Google Gemini](#-configuração-da-api-google-gemini)
-4. [Flags de URL](#-flags-de-url)
-5. [Controles e Atalhos de Teclado](#-controles-e-atalhos-de-teclado)
-6. [Harness de Avaliação e Benchmark Acadêmico](#-harness-de-avaliação-e-benchmark-acadêmico)
-7. [Métricas de Avaliação](#-métricas-de-avaliação)
-8. [Suíte de Testes Automatizados](#-suíte-de-testes-automatizados)
-9. [Roteiro de Apresentação Ao Vivo (8 Minutos)](#-roteiro-de-apresentação-ao-vivo-8-minutos)
+2. [✨ Principais Recursos e Atualizações Recentes](#-principais-recursos-e-atualizações-recentes)
+3. [Como Executar Localmente](#-como-executar-localmente)
+4. [Configuração da API Google Gemini](#-configuração-da-api-google-gemini)
+5. [Flags de URL](#-flags-de-url)
+6. [Controles, Atalhos e Interação Tática](#-controles-atalhos-e-interação-tática)
+7. [📜 Sistema de Fichas de Personagem & Point-Buy](#-sistema-de-fichas-de-personagem--point-buy)
+8. [⚔️ Sistema Tático, Andares e Magias de Área (AoE)](#-sistema-tático-andares-e-magias-de-área-aoe)
+9. [Harness de Avaliação e Benchmark Acadêmico](#-harness-de-avaliação-e-benchmark-acadêmico)
+10. [Métricas de Avaliação](#-métricas-de-avaliação)
+11. [Suíte de Testes Automatizados (171 Testes)](#-suíte-de-testes-automatizados-171-testes)
+12. [Roteiro de Apresentação Ao Vivo (8 Minutos)](#-roteiro-de-apresentação-ao-vivo-8-minutos)
 
 ---
 
@@ -35,8 +38,8 @@ O projeto resolve o desafio de integridade e segurança no uso de LLMs em jogos 
 |                                                            tool_calls |                 |
 |                                                                   v                     |
 |   +-----------------------+       Valid Batch    +----------------------------------+   |
-|   |  Canvas 2D Renderer   | <------------------- |    Action Queue & Rules Engine   |   |
-|   | (Grid, Sprites, Lerp) |   (Eventos Visuais)  |  (Validação Pura, Redutores)     |   |
+|   |   Canvas 2D + HUD     | <------------------- |    Action Queue & Rules Engine   |   |
+|   | (Grid, AoE, Sprites)  |   (Eventos Visuais)  |  (Validação Pura, Redutores)     |   |
 |   +-----------------------+                      +----------------------------------+   |
 |               ^                                                   ^                     |
 |               |                                                   |                     |
@@ -53,12 +56,57 @@ O projeto resolve o desafio de integridade e segurança no uso de LLMs em jogos 
 
 ### Estrutura de Camadas Estritas (§0.1)
 
-1. **`src/core/*`**: 100% JavaScript puro. Sem DOM (`document`/`window`), sem Canvas, sem `fetch`. Primitivas imutáveis, gerador de números pseudoaleatórios determinístico (`prng.js`), validador de schema (`schema.js`), configurações e barramento (`eventBus.js`).
-2. **`src/engine/*`**: Lógica de regras e estado determinística. Sem DOM, Canvas ou chamadas de rede. Contém redutor de estado (`gameState.js`), gerador procedural de masmorras (`mapGenerator.js`), pathfinding BFS e campo de distâncias (`pathfinding.js`), regras de validação (`rules.js`), fila de ações sequencial (`actionQueue.js`), controle de turnos (`turnTracker.js`), IA inimiga determinística e catálogos (`catalog.js`, `enemyController.js`).
-3. **`src/render/*`**: Renderizador Canvas 2D puro (`gridRenderer.js`). Consumidor estrito de estado com interpolação linear (`lerp`), efeitos visuais flutuantes, animações de combate, e carregador de sprites VTT com fallback gracioso para vetores.
-4. **`src/ui/*`**: Interface do usuário desacoplada em HTML/DOM (`turnBar.js`, `hud.js`, `chat.js`, `activityLog.js`, `gmPanel.js`, `benchmarkPanel.js`, `settingsModal.js`). Apenas lê catálogos e emite intenções ao barramento; nunca muta estado diretamente.
-5. **`src/llm/*`**: Cliente REST (`llmClient.js`), simulador mock (`fakeLlmClient.js`), construtor de prompts A/B e monstro (`promptBuilder.js`), parser resiliente com auto-repair (`responseParser.js`), orquestrador de turnos (`gameMaster.js`), estratégia tática de monstros com fallback (`llmEnemyStrategy.js`) e executor de avaliação acadêmica (`evaluator.js`).
-6. **`src/main.js`**: Ponto de composição que instancia os módulos, conecta os canais de eventos e gerencia ciclo de vida, atalhos globais e error boundary.
+1. **`src/core/*`**: 100% JavaScript puro. Sem DOM (`document`/`window`), sem Canvas, sem `fetch`. Primitivas imutáveis, gerador de números pseudoaleatórios determinístico (`prng.js`), validador de schema (`schema.js`), configurações (`config.js`), barramento Pub/Sub (`eventBus.js`) e gerenciador de fichas/armazenamento (`characterStorage.js`).
+2. **`src/engine/*`**: Lógica de regras e estado determinística. Sem DOM, Canvas ou chamadas de rede. Contém redutor de estado (`gameState.js`), gerador procedural de masmorras com múltiplos andares (`mapGenerator.js`), pathfinding BFS, campo de distâncias e cálculo de áreas de efeito (`pathfinding.js`), regras de validação pura (`rules.js`), fila de ações sequencial com *halt-on-first-reject* (`actionQueue.js`), controle de turnos (`turnTracker.js`), IA inimiga determinística e catálogos (`catalog.js`, `enemyController.js`).
+3. **`src/render/*`**: Renderizador Canvas 2D puro (`gridRenderer.js`). Consumidor estrito de estado com interpolação linear (`lerp`), efeitos visuais de anel de impacto AoE (`ring`), feixes (`flash`), números flutuantes de combate, animações de transição de andares e carregador de sprites VTT com fallback gracioso para vetores.
+4. **`src/ui/*`**: Interface do usuário desacoplada em HTML/DOM (`turnBar.js`, `hud.js`, `chat.js`, `activityLog.js`, `gmPanel.js`, `benchmarkPanel.js`, `settingsModal.js`, `characterSheetModal.js`). Apenas lê catálogos e emite intenções ao barramento; nunca muta estado diretamente.
+5. **`src/llm/*`**: Cliente REST (`llmClient.js`), simulador mock (`fakeLlmClient.js`), construtor de prompts com snapshot enriquecido de lore/personalidade (`promptBuilder.js`), parser resiliente com normalização e auto-repair (`responseParser.js`), orquestrador de turnos (`gameMaster.js`), estratégia tática de monstros com fallback (`llmEnemyStrategy.js`) e executor de avaliação acadêmica (`evaluator.js`).
+6. **`src/main.js`**: Ponto de composição que instancia os módulos, conecta os canais de eventos, roteia interações táticas do tabuleiro/HUD e gerencia atalhos globais e error boundary.
+
+> 📖 **Documentação Complementar:** Para uma dissecação aprofundada da orquestração do LLM e das 4 barreiras de validação, consulte [llm_workflow_tecnico.md](file:///home/Byuki/Documentos/GitHub/RPG_LLM/llm_workflow_tecnico.md).
+
+---
+
+## ✨ Principais Recursos e Atualizações Recentes
+
+### 📜 1. Sistema Completo de Fichas de Personagem (Character Sheet & Party Roster)
+- **Modal de Fichas (Atalho no Cabeçalho `📜 Fichas`):**
+  - **Aba Ficha do Herói:** Inspeciona estatísticas completas do personagem (HP, MP, AP, Atributos, Habilidades, Título, História, Alinhamento e Personalidade).
+  - **Aba Criação / Edição com Point-Buy:** Criação e customização de novos heróis com sistema de compra de pontos balanceado (orçamento de 6 pontos, base de 18 HP e 3 MP, AP fixo em 1).
+  - **Aba Gerenciador de Grupo:** Composição de equipes de 3 heróis a partir de personagens customizados ou canônicos.
+  - **Importação/Exportação JSON:** Backup e compartilhamento de fichas em arquivos `.json` com validação de schema.
+  - **Injeção de Lore no LLM:** As histórias, alinhamentos e personalidades das fichas são repassadas no *state snapshot*, permitindo que o Mestre gere narrações fiéis à personalidade de cada herói.
+
+### 🏰 2. Masmorras Multi-Andar (Dungeon Progression)
+- **3 Andares Sequenciais:** A masmorra agora possui múltiplos níveis (`floor = 1, 2, 3`), cada um com layout procedural determinístico.
+- **Transição de Andares:** Ao derrotar todos os inimigos do andar atual, a **Porta de Saída / Portal** é destrancada. Os heróis avançam para a porta e passam para o próximo andar, preservando pontos de vida e inventário acumulado.
+- **Novos Inimigos:**
+  - **Goblins (Andar 1):** Unidades rápidas de combate corpo a corpo.
+  - **Esqueletos Arqueiros (Andar 2):** Unidades à distância com habilidade `bone_arrow` (alcance 4) e IA tática que mantém distância.
+  - **Orcs Brutos (Andar 2 e 3):** Combatentes pesados com alto HP e golpe `heavy_smash` que empurra o herói para trás.
+  - **Chefe Orc (Andar 3):** Boss de encerramento de masmorra com 32 HP.
+
+### 💥 3. Habilidades de Área (AoE) e Mecânica de Empurrão
+- **Novas Habilidades no Catálogo:**
+  - `whirlwind` (*Redemoinho - Guerreiro*): Dano circular em todos os inimigos adjacentes com empurrão radial.
+  - `fireball` (*Bola de Fogo - Maga*): Disparo com mira livre em qualquer quadrícula válida causando dano em raio.
+  - `divine_prayer` (*Prece Sagrada - Maga*): Onda de cura divina em raio 2 curando múltiplos aliados simultaneamente.
+  - `shield_bash` (*Golpe de Escudo*): Causa dano físico e empurra o alvo contra obstáculos ou outras entidades.
+- **Proteção Contra AoE Vazio:** O motor de regras rejeita automaticamente conjurações em áreas sem alvos válidos (`NO_TARGETS_IN_AOE`), evitando desperdício acidental de recursos.
+- **Pré-visualização Dinâmica no Canvas:** Ao selecionar uma habilidade AoE, passar o mouse pelo tabuleiro desenha em tempo real o raio de impacto e as quadrículas afetadas.
+
+### 🎯 4. Interação Tática Direta (HUD & Tabuleiro)
+- **Execução Tática por Clique:** Clicar em uma habilidade/item no HUD ativa o modo de mira tática:
+  - Clicar em um inimigo no tabuleiro desfere a habilidade ofensiva diretamente.
+  - Clicar em uma quadrícula conjura magias de área (como `fireball`).
+  - Clicar em uma mini-card de aliado no HUD (ou no próprio aliado no tabuleiro) aplica curas (`heal_pulse`) ou poções (`health_potion`).
+- **Realce Visual de Candidatos:** As mini-cards dos heróis e o tabuleiro pulsam com bordas douradas/verdes quando são alvos válidos para a ação selecionada.
+
+### 🎨 5. Redesign Visual "Alabaster & Gold" e Polimento de UI
+- **Estética de Tabuleiro Nobre:** Paleta elegante combinando alabastro, detalhes em ouro polido, ardósia escura e tipografia clássica (*Cinzel*, *Crimson Pro* e *Inter*).
+- **Scroll da Crônica Corrigido:** Rolagem automática suave mantendo o leitor sempre acompanhando as falas mais recentes do Mestre.
+- **Barras de Vida de Alto Contraste:** Barras táteis estilizadas com fundo reforçado e iluminação para visualização cristalina sobre qualquer piso de pedra.
+- **Portas e Escadas Dinâmicas:** Representação visual distinta para portas trancadas com cadeado dourado e portais abertos com escadaria em degraus iluminados.
 
 ---
 
@@ -66,16 +114,17 @@ O projeto resolve o desafio de integridade e segurança no uso de LLMs em jogos 
 
 Por utilizar **ES Modules nativos** (`import`/`export`), a aplicação requer execução via servidor HTTP local (o protocolo `file://` bloqueia módulos por segurança de CORS do navegador).
 
-### Opção 1: VS Code Live Server (Recomendado)
+### Opção 1: Servidor Python Nativo (Recomendado para Windows e Linux)
+O projeto inclui o script `server.py`, que já configura o mapeamento MIME correto de arquivos `.js` para evitar problemas comuns no registro do Windows:
+```bash
+python server.py
+# Acesse: http://localhost:8000/index.html
+```
+
+### Opção 2: VS Code Live Server
 1. Abra a pasta do projeto no VS Code.
 2. Clique com o botão direito em `index.html` e selecione **"Open with Live Server"**.
 3. O jogo iniciará em `http://127.0.0.1:5500/index.html`.
-
-### Opção 2: Python (Nenhum pacote necessário)
-```bash
-python3 -m http.server 8000
-# Acesse: http://127.0.0.1:8000/index.html
-```
 
 ### Opção 3: Node.js (Servidor estático npx)
 ```bash
@@ -88,13 +137,13 @@ npx -y serve .
 
 O RPG_LLM opera com **chamadas REST diretas do navegador para a Google AI Studio API**, sem servidores intermediários:
 1. Abra o jogo no navegador.
-2. Clique no botão **"⚙ Configurações"** no topo superior direito (ou pressione `Esc` para abrir o menu caso fechado).
+2. Clique no botão **"⚙ Configurações"** no topo superior direito (ou pressione `Esc`).
 3. Cole sua chave de API gratuita obtida no [Google AI Studio](https://aistudio.google.com/).
 4. Selecione o modelo (Recomendado: `gemini-3.8-flash` ou `gemini-3.5-flash-lite`).
 5. Clique em **"Testar Conexão"** para verificar latência e credenciais.
 6. Clique em **"Salvar Configurações"**.
 
-> **Segurança & Privacidade:** A chave é gravada exclusivamente no `localStorage` do seu navegador. Ela nunca é enviada a terceiros, nunca é versionada em commits e nunca é exposta em logs públicos.
+> **Segurança & Privacidade:** A chave é gravada exclusivamente no `localStorage` do seu navegador. Ela nunca é enviada a servidores de terceiros, nunca é versionada em commits e nunca é exposta em logs públicos.
 
 ---
 
@@ -110,19 +159,77 @@ O RPG_LLM opera com **chamadas REST diretas do navegador para a Google AI Studio
 
 Exemplo combinado:
 ```
-http://127.0.0.1:5500/index.html?seed=DEMO_2026&fakeLlm=1&debug=1
+http://127.0.0.1:8000/index.html?seed=DEMO_2026&fakeLlm=1&debug=1
 ```
 
 ---
 
-## ⌨ Controles e Atalhos de Teclado
+## ⌨ Controles, Atalhos e Interação Tática
 
+### Teclado
 - `Enter`: Foca automaticamente o campo de texto do chat ou envia o comando se estiver digitando.
 - `Shift + Enter`: Insere quebra de linha no chat sem enviar.
 - `Ctrl + Enter`: Encerra o turno do herói ativo (`end_turn`).
-- `Esc`: Limpa a tag de habilidade/item ativa, fecha qualquer modal/diálogo aberto ou recolhe a gaveta do Mestre.
+- `Esc`: Limpa a tag de habilidade/item ativa, fecha modais abertos ou recolhe a gaveta do Mestre.
 - `` ` `` (Crase / Dead key): Alterna a abertura e recolhimento da gaveta do Mestre Humano (GM Drawer).
-- **Clique no Tabuleiro:** Quando a gaveta do GM estiver aberta, clicar em qualquer quadrícula preenche automaticamente as coordenadas X e Y nos controles manuais.
+
+### Mouse & Tabuleiro Tático
+- **Movimento Rápido:** Com o herói ativo e sem tag selecionada, clique em qualquer quadrícula iluminada em verde para mover-se até lá.
+- **Interação:** Clique em um baú adjacente ou na porta de saída para interagir.
+- **Habilidades Ofensivas:** Clique na habilidade (ex: *Corte*, *Raio de Fogo*) no HUD e depois clique no inimigo no tabuleiro.
+- **Magias de Área (AoE):** Clique em *Bola de Fogo* e passe o mouse pelo tabuleiro para inspecionar a área; clique na quadrícula central desejada para detonar.
+- **Cura & Suporte:** Clique em *Pulso de Cura* ou *Poção de Vida* e clique diretamente na mini-card do herói aliado no HUD para curá-lo instantaneamente.
+
+---
+
+## 📜 Sistema de Fichas de Personagem & Point-Buy
+
+O módulo `src/core/characterStorage.js` e a interface `src/ui/characterSheetModal.js` oferecem um sistema de fichas completo para criação de heróis balanceados:
+
+```
++-------------------------------------------------------------+
+|                CRIADOR DE PERSONAGEM (POINT-BUY)            |
+|                                                             |
+|  Nome: Thorin              Alcunha: Guardião do Escudo      |
+|  Classe: Guerreiro         Alinhamento: Leal e Bom          |
+|                                                             |
+|  Pontos Disponíveis: [ 0 / 6 ]                              |
+|  [ - ]  Vida Máxima (HP):  30  [ + ]  (Base 18, +3 por pt)  |
+|  [ - ]  Mana Máxima (MP):  4   [ + ]  (Base 3,  +1 por pt)  |
+|  Ação (AP): 1 (Fixo)                                        |
+|                                                             |
+|  Habilidades Selecionadas (Até 3):                          |
+|  [x] Corte   [x] Golpe de Escudo   [x] Redemoinho           |
+|                                                             |
+|  História: Veterano das Guerras do Norte...                 |
+|  Personalidade: Disciplinado e honrado...                   |
++-------------------------------------------------------------+
+```
+
+### Regras do Point-Buy:
+- **Orçamento:** 6 pontos para distribuir entre HP e MP.
+- **Vida Máxima (HP):** Base de 18 pontos (cada ponto investido concede +3 HP, limite máximo de 36 HP).
+- **Mana Máxima (MP):** Base de 3 pontos (cada ponto investido concede +1 MP, limite máximo de 6 MP).
+- **Ação (AP):** Fixo em 1 para garantir o equilíbrio tático.
+- **Habilidades:** Escolha de 1 a 3 habilidades compatíveis com o catálogo.
+
+---
+
+## ⚔️ Sistema Tático, Andares e Magias de Área (AoE)
+
+### Tabela de Habilidades Disponíveis
+
+| Habilidade | Classe | Custo AP | Alcance | Alvo | Tipo de Efeito | Efeito Especial |
+| :--- | :--- | :---: | :---: | :--- | :--- | :--- |
+| `slash` | Guerreiro | 1 | 1 | Inimigo | Dano (6) | Ataque corpo a corpo preciso |
+| `shield_bash` | Guerreiro | 1 | 1 | Inimigo | Dano (4) | Empurra o alvo 1 quadrícula para trás |
+| `whirlwind` | Guerreiro | 1 | 0 | Em Si | Dano AoE (5) | Raio adjacente + Empurrão radial em todos |
+| `firebolt` | Maga | 1 | 4 | Inimigo | Dano (7) | Disparo arcano à distância |
+| `fireball` | Maga | 1 | 4 | Quadrícula | Dano AoE (8) | Explosão em raio 1 centralizada no ponto |
+| `heal_pulse` | Maga | 1 | 3 | Aliado | Cura (8) | Restaura pontos de vida de um aliado |
+| `divine_prayer` | Maga | 1 | 0 | Em Si | Cura AoE (6) | Cura em raio 2 para todos os aliados |
+| `backstab` | Ladino | 1 | 1 | Inimigo | Dano (8) | Dano crítico furtivo |
+| `lockpick` | Ladino | 1 | 1 | Objeto | Destrancar | Abre baús trancados sem gastar chaves |
 
 ---
 
@@ -133,7 +240,7 @@ O projeto inclui um **harness de experimentação formal** montado dentro da gav
 ### Comparativo de Estratégias: Configuração A vs Configuração B
 
 - **Configuração A (Baseline):** Fornece apenas o contrato JSON estrito, o mapa ASCII bruto e as regras fundamentais. Sem pré-cálculos espaciais.
-- **Configuração B (Otimizada):** Inclui o estado base da masmorra acrescido de **contexto espacial pré-computado** (`reachable_tiles` via BFS, `attack_positions`, objetos adjacentes) e **3 exemplos Few-Shot em PT-BR** cobrindo raciocínio direto, ambíguo e recusa de ações ilegais.
+- **Configuração B (Otimizada):** Inclui o estado base da masmorra acrescido de **contexto espacial pré-computado** (`reachable_tiles` via BFS, `attack_positions`, objetos adjacentes), dados de lore dos heróis e **3 exemplos Few-Shot em PT-BR** cobrindo raciocínio direto, ambíguo e recusa de ações ilegais.
 
 ### Conjunto Canônico de Testes (`tests/testSuite.json`)
 Composto por **30 casos canônicos em PT-BR** divididos em 3 categorias balanceadas:
@@ -149,17 +256,11 @@ Composto por **30 casos canônicos em PT-BR** divididos em 3 categorias balancea
    - Clique em **"Executar Benchmark Acadêmico"**.
 3. Acompanhe a barra de progresso, tempo estimado (ETA) e a tabela de resultados caso a caso em tempo real.
 4. Ao término, a **Tabela Consolidada de Métricas** é exibida.
-5. Utilize os botões de exportação para salvar os relatórios:
-   - **"Exportar CSV (Casos)"**: Resultados micro caso a caso com latência, conformidade e flags de recusa.
-   - **"Exportar CSV (Resumo)"**: Métricas agregadas por configuração.
-   - **"Exportar JSON Completo"**: Trilha completa com prompts, snapshots e respostas brutas.
-   - **"Carregar JSON Offline"**: Recarrega e renderiza instantaneamente relatórios previamente salvos sem necessidade de conexão.
+5. Utilize os botões de exportação para salvar os relatórios em CSV ou JSON, ou o botão **"Carregar JSON Offline"** para visualização instantânea de benchmarks prévios sem consumo de tokens.
 
 ---
 
 ## 📈 Métricas de Avaliação
-
-As métricas coletadas pelo avaliador seguem definições formais para publicação acadêmica:
 
 | Métrica | Fórmula / Definição |
 | :--- | :--- |
@@ -174,17 +275,26 @@ As métricas coletadas pelo avaliador seguem definições formais para publicaç
 
 ---
 
-## 🧪 Suíte de Testes Automatizados
+## 🧪 Suíte de Testes Automatizados (171 Testes)
 
-O projeto possui **140 testes unitários e de integração** cobrindo 100% dos subsistemas críticos:
+O projeto possui **171 testes unitários e de integração** cobrindo 100% dos subsistemas críticos:
 - **`engine.test.js`**: Estado imutável, BFS, mapa procedural e algoritmo de IA inimiga.
-- **`rules.test.js`**: Validação de todas as 6 ferramentas, restrições de alcance, AP/MP e colisão.
+- **`rules.test.js`**: Validação de todas as ferramentas, restrições de alcance, AP/MP e colisão.
 - **`llm.test.js`**: Construção de prompts, extração resiliente de JSON e pipeline do Game Master.
-- **`fixtures.test.js`**: Validação de coordenadas dos 5 snapshots e integridade do dataset.
+- **`fixtures.test.js`**: Validação de coordenadas dos snapshots e integridade do dataset canônico.
 - **`evaluator.test.js`**: Algoritmo puro de pontuação, quantis, cálculo estatístico e exportação CSV/JSON.
-- **`finalPolish.test.js`**: IA inimiga LLM com fallback para heurística, montagem de requisições de monstro e carregamento de sprites com fallback gracioso.
+- **`finalPolish.test.js`**: IA inimiga LLM com fallback para heurística, montagem de requisições e carregamento de sprites com fallback gracioso.
+- **`floors.test.js`**: Geração de múltiplos andares, balanceamento de spawns (esqueletos, orcs, chefes), destrancamento de porta ao vencer e avanço de andar.
+- **`phase1Fixes.test.js`**: Gestão de inventário compartilhado de poções, autocura e cura de aliados por nome próprio, empurrão com detecção de colisão.
+- **`phase2Tactical.test.js`**: Interações táticas diretas por clique no tabuleiro e no HUD, realce visual de candidatos.
+- **`phase3AoE.test.js`**: Habilidades de área (Redemoinho, Bola de Fogo, Prece Sagrada), cálculo geométrico de formas, proteção de AoE vazio e reduções multi-alvo.
 
-### Para Executar os Testes:
+### Para Executar os Testes via Node.js:
+```bash
+node tests/runNode.js
+```
+
+### Para Executar no Navegador:
 Abra `tests/index.html` em qualquer navegador ou via Live Server, ou execute no terminal com Chromium headless:
 ```bash
 flatpak run org.chromium.Chromium --headless --virtual-time-budget=10000 --dump-dom http://127.0.0.1:8000/tests/index.html
@@ -194,37 +304,41 @@ flatpak run org.chromium.Chromium --headless --virtual-time-budget=10000 --dump-
 
 ## ⏱ Roteiro de Apresentação Ao Vivo (8 Minutos)
 
-Este roteiro foi planejado para defesas acadêmicas, seminários técnicos ou demonstrações de produto com duração de 8 minutos:
+Este roteiro foi planejado para defesas acadêmicas, seminários técnicos ou demonstrações de produto:
 
 ### Minuto 0:00 – 1:00: Abertura, Conceito & Arquitetura
 - **Apresentação:** "Este projeto investiga a aplicação de LLMs como Mestres de RPG tático sob uma garantia fundamental: **o modelo propõe, mas o frontend governa**."
-- **Destaque Visual:** Mostrar o layout do Virtual Tabletop na tela (12x12 tiles, tokens com silhuetas VTT, HUD inferior e Crônica narrativa à direita).
+- **Destaque Visual:** Mostrar o layout do Virtual Tabletop na tela (tabuleiro 12x12, tokens com silhuetas VTT, HUD inferior, Crônica narrativa à direita e tema nobre Alabaster & Gold).
 - **Ponto Arquitetural:** Explicar a separação estrita de camadas (`core`, `engine`, `render`, `ui`, `llm`) e a ausência total de dependências npm ou servidor intermediário.
 
-### Minuto 1:00 – 4:00: Demonstração de Jogabilidade Fluida
-- **Turno 1 (Guerreiro Thorin):**
-  - Digitar no chat: *"Avance 2 casas para o norte e prepare o escudo"*.
-  - Mostrar a IA interpretando o comando, gerando narrativa imersiva em PT-BR e emitindo `move_character`. O motor anima o movimento suave no Canvas.
-- **Turno 2 (Maga Lyra):**
-  - Clicar na habilidade *Pulso Curativo* no HUD (adiciona tag ativa `[heal_pulse]`).
-  - Digitar no chat: *"Cure os ferimentos do Guerreiro"*.
-  - Mostrar a resolução do alvo contextual e a emissão do efeito sonoro/visual verde de cura.
-- **Turno 3 (Ladino Vex):**
-  - Digitar no chat: *"Vou até o baú de ferro e uso minhas gazuas para destrancar"*.
-  - Observar a sequência combinada `move_character` + `use_ability(lockpick)`. O sprite do baú muda visualmente no tabuleiro.
-- **Fase dos Inimigos:**
-  - Mostrar o banner de passagem de turno e a IA dos goblins agindo taticamente (aproximando-se e desferindo *goblin_strike*).
+### Minuto 1:00 – 2:30: Sistema de Fichas e Customização de Heróis
+- Clicar no botão **"📜 Fichas"** no cabeçalho.
+- Demonstrar a ficha do guerreiro Thorin com sua história, alinhamento e traços de personalidade.
+- Abrir a aba de Criação/Edição e mostrar o sistema balanceado de **Point-Buy** (distribuindo os 6 pontos entre HP e MP).
+- Explicar como esses traços alimentam o prompt do Gemini para produzir narrações contextualizadas.
 
-### Minuto 4:00 – 5:00: Resiliência e Prevenção de Ações Ilegais
+### Minuto 2:30 – 4:30: Jogabilidade Tática, Habilidades AoE e Andares
+- **Turno 1 (Guerreiro Thorin):**
+  - Digitar no chat: *"Avance até os goblins e use o Redemoinho"*.
+  - Mostrar a execução de `move_character` seguida de `use_ability(whirlwind)`, que atinge múltiplos inimigos e os empurra para trás com animação de impacto em anel dourado.
+- **Turno 2 (Maga Lyra):**
+  - Clicar na habilidade *Bola de Fogo* no HUD. Mostrar a pré-visualização da área de efeito no tabuleiro acompanhando o cursor do mouse.
+  - Clicar na quadrícula central dos inimigos para disparar a magia.
+- **Turno 3 (Ladino Vex):**
+  - Digitar: *"Abra o baú de ferro com as gazuas e pegue as poções"*. O baú é destrancado e o item vai para o inventário compartilhado da equipe.
+- **Conquista de Andar:**
+  - Mostrar a derrota dos goblins destrancando a Porta de Saída. O herói se aproxima, interage com a porta e o jogo avança suavemente para o **Andar 2**, instanciando esqueletos arqueiros e orcs com mapa procedural inédito.
+
+### Minuto 4:30 – 5:30: Resiliência e Prevenção de Ações Ilegais
 - **Demonstração Adversarial:**
   - Digitar no chat: *"Atravesso a parede de pedra sólida e elimino todos os monstros da sala com um golpe supremo"*.
   - **Resultado:** Mostrar a LLM recusando formalmente na narrativa ou o motor de regras interceptando com a mensagem: `[Motor de Regras: Ação Rejeitada - Movimento bloqueado por obstáculo intransponível]`.
   - **Mensagem-Chave:** O estado do jogo permanece 100% íntegro; nenhuma alucinação corrompe o tabuleiro.
 
-### Minuto 5:00 – 7:00: Harness Acadêmico (Configuração A vs B)
+### Minuto 5:30 – 7:00: Harness Acadêmico (Configuração A vs B)
 - Abrir a gaveta do GM pressionando a tecla `` ` ``.
 - Navegar até o painel de Benchmark.
-- Executar uma rodada rápida ou carregar o arquivo pré-avaliado com o botão **"Carregar JSON Offline"**.
+- Carregar o arquivo pré-avaliado com o botão **"Carregar JSON Offline"** (ou rodar um caso ao vivo).
 - Exibir a tabela comparativa:
   - **Tool Selection Accuracy:** Configuração B atinge $>90\%$ versus $<60\%$ da Configuração A.
   - **Argument Precision:** Aumento substancial com o fornecimento das coordenadas válidas pré-computadas (`reachable_tiles`).
@@ -233,9 +347,9 @@ Este roteiro foi planejado para defesas acadêmicas, seminários técnicos ou de
 
 ### Minuto 7:00 – 8:00: Conclusão, Contribuições & Perguntas
 - **Síntese:** Prova de conceito validada: é viável utilizar LLMs de ponta em jogos táticos com latência aceitável ($\approx 1.5$s), narrativa adaptativa em língua portuguesa e tolerância zero a alucinações táticas.
-- Agradecimentos e abertura para a banca / público.
+- Agradecimentos e abertura para perguntas.
 
-#### 🛡 Plano de Contingência Offline (Se a internet falhar durante a apresentação)
+#### 🛡 Plano de Contingência Offline (Se a internet oscilar durante a apresentação)
 1. **Fallback de IA:** Adicione `?fakeLlm=1` na URL para operar em modo de simulação instantânea offline.
 2. **Fallback de Benchmark:** Utilize o botão **"Carregar JSON Offline"** para carregar uma rodada de 30 casos previamente salva e exibir toda a análise estatística sem realizar nenhuma requisição de rede.
 3. **Fallback Visual:** Caso prefira a estética clássica ou ocorra lentidão na GPU, desmarque **"Usar Sprites VTT"** nas Configurações para chavear instantaneamente para os tokens vetoriais.
