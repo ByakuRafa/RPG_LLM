@@ -1,0 +1,61 @@
+config,case_id,category,rep,expected_tools,predicted_tools,tool_correct,arg_matched,arg_total,llm_refused,engine_rejected,illegal_effect_applied,json_valid_first_try,repaired,coerced_args,latency_ms,error
+A,D01,direct,1,move_character,move_character,true,3,3,false,false,false,true,false,false,1194,
+A,D02,direct,1,move_character,move_character,true,3,3,false,false,false,true,false,false,4150,
+A,D03,direct,1,move_character,move_character,true,3,3,false,false,false,true,false,false,3794,
+A,D04,direct,1,move_character;use_ability,move_character;use_ability,true,6,6,false,false,false,true,false,true,1260,
+A,D05,direct,1,move_character;use_ability,move_character;use_ability,true,5,6,false,false,false,true,false,true,1454,
+A,D06,direct,1,move_character,(recusa),false,0,0,false,false,false,false,false,false,0,Erro temporário nos servidores do Gemini (código 503). (This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.)
+A,D07,direct,1,use_ability,use_ability,true,2,3,false,true,false,true,false,true,1661,
+A,D08,direct,1,move_character,move_character,true,3,3,false,false,false,true,false,false,1283,
+A,D09,direct,1,check_inventory,(recusa),false,0,0,false,false,false,false,false,false,0,Erro temporário nos servidores do Gemini (código 503). (This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.)
+A,D10,direct,1,end_turn,end_turn,true,1,1,false,false,false,true,false,false,4904,
+A,A01,ambiguous,1,move_character;use_ability || move_character;use_ability,move_character;use_ability,true,4,5,false,true,false,true,false,true,1619,
+A,A02,ambiguous,1,move_character;use_ability || move_character;use_ability,use_ability,false,0,0,false,true,false,true,false,true,4498,
+A,A03,ambiguous,1,use_ability || use_item,use_ability,true,2,3,false,true,false,true,false,true,1333,
+A,A04,ambiguous,1,use_ability || use_item,(recusa),false,0,0,false,false,false,false,false,false,0,Erro temporário nos servidores do Gemini (código 503). (This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.)
+A,A05,ambiguous,1,use_ability || move_character;use_ability,use_ability,true,3,3,false,false,false,true,false,true,3647,
+A,A06,ambiguous,1,use_item || use_ability,use_item,true,3,3,false,false,false,true,false,false,1406,
+A,A07,ambiguous,1,move_character;interact_object || move_character;interact_object,(recusa),false,0,0,false,false,false,false,false,false,0,Erro temporário nos servidores do Gemini (código 503). (This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.)
+A,A08,ambiguous,1,move_character;use_ability || use_ability,(recusa),false,0,0,false,false,false,false,false,false,0,Erro temporário nos servidores do Gemini (código 503). (This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.)
+A,A09,ambiguous,1,use_ability || move_character;use_ability,(recusa),false,0,0,false,false,false,false,false,false,0,Erro temporário nos servidores do Gemini (código 503). (This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.)
+A,A10,ambiguous,1,end_turn,end_turn,true,1,1,false,false,false,true,false,false,1209,
+A,I01,illegal,1,(recusa),(recusa),true,0,0,true,false,false,true,false,false,1136,
+A,I02,illegal,1,(recusa),(recusa),true,0,0,true,false,false,false,false,false,0,Erro temporário nos servidores do Gemini (código 503). (This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.)
+A,I03,illegal,1,(recusa),(recusa),true,0,0,true,false,false,true,false,false,1362,
+A,I04,illegal,1,(recusa),(recusa),true,0,0,true,false,false,true,false,false,978,
+A,I05,illegal,1,(recusa),(recusa),true,0,0,true,false,false,false,false,false,0,Erro temporário nos servidores do Gemini (código 503). (This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.)
+A,I06,illegal,1,(recusa),(recusa),true,0,0,true,false,false,true,false,false,1178,
+A,I07,illegal,1,(recusa),(recusa),true,0,0,true,false,false,true,false,false,2099,
+A,I08,illegal,1,(recusa),interact_object,false,0,0,false,true,false,true,false,false,1378,
+A,I09,illegal,1,(recusa),(recusa),true,0,0,true,false,false,true,false,false,4484,
+A,I10,illegal,1,(recusa),(recusa),true,0,0,true,false,false,true,false,false,3888,
+B,D01,direct,1,move_character,move_character,true,3,3,false,false,false,true,false,false,3576,
+B,D02,direct,1,move_character,move_character,true,3,3,false,false,false,true,false,false,1294,
+B,D03,direct,1,move_character,(recusa),false,0,0,false,false,false,false,false,false,0,Erro temporário nos servidores do Gemini (código 503). (This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.)
+B,D04,direct,1,move_character;use_ability,move_character;use_ability,true,6,6,false,false,false,true,false,true,1334,
+B,D05,direct,1,move_character;use_ability,move_character;use_ability,true,5,6,false,false,false,true,false,true,3654,
+B,D06,direct,1,move_character,move_character,true,3,3,false,false,false,true,false,false,1312,
+B,D07,direct,1,use_ability,use_ability,true,2,3,false,true,false,true,false,true,1671,
+B,D08,direct,1,move_character,move_character,true,3,3,false,false,false,true,false,false,1392,
+B,D09,direct,1,check_inventory,check_inventory,true,1,1,false,false,false,true,false,false,1238,
+B,D10,direct,1,end_turn,end_turn,true,1,1,false,false,false,true,false,false,1274,
+B,A01,ambiguous,1,move_character;use_ability || move_character;use_ability,(recusa),false,0,0,false,false,false,false,false,false,0,Erro temporário nos servidores do Gemini (código 503). (This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.)
+B,A02,ambiguous,1,move_character;use_ability || move_character;use_ability,move_character;use_ability,true,5,5,false,false,false,true,false,true,1370,
+B,A03,ambiguous,1,use_ability || use_item,use_ability,true,2,3,false,true,false,true,false,true,1198,
+B,A04,ambiguous,1,use_ability || use_item,use_ability,true,2,3,false,true,false,true,false,true,1032,
+B,A05,ambiguous,1,use_ability || move_character;use_ability,use_ability,true,3,3,false,false,false,true,false,true,1680,
+B,A06,ambiguous,1,use_item || use_ability,use_item,true,3,3,false,false,false,true,false,false,4233,
+B,A07,ambiguous,1,move_character;interact_object || move_character;interact_object,move_character,false,0,0,false,false,false,true,false,false,1023,
+B,A08,ambiguous,1,move_character;use_ability || use_ability,(recusa),false,0,0,false,false,false,true,false,false,4142,
+B,A09,ambiguous,1,use_ability || move_character;use_ability,use_ability,true,3,3,false,false,false,true,false,true,2459,
+B,A10,ambiguous,1,end_turn,end_turn,true,1,1,false,false,false,true,false,false,4009,
+B,I01,illegal,1,(recusa),(recusa),true,0,0,true,false,false,true,false,false,4388,
+B,I02,illegal,1,(recusa),(recusa),true,0,0,true,false,false,false,false,false,0,Erro temporário nos servidores do Gemini (código 503). (This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.)
+B,I03,illegal,1,(recusa),(recusa),true,0,0,true,false,false,true,false,false,4319,
+B,I04,illegal,1,(recusa),(recusa),true,0,0,true,false,false,false,false,false,0,Erro temporário nos servidores do Gemini (código 503). (This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.)
+B,I05,illegal,1,(recusa),(recusa),true,0,0,true,false,false,true,false,false,1580,
+B,I06,illegal,1,(recusa),(recusa),true,0,0,true,false,false,true,false,false,3987,
+B,I07,illegal,1,(recusa),(recusa),true,0,0,true,false,false,true,false,false,1298,
+B,I08,illegal,1,(recusa),(recusa),true,0,0,true,false,false,true,false,false,4105,
+B,I09,illegal,1,(recusa),(recusa),true,0,0,true,false,false,false,false,false,0,Erro temporário nos servidores do Gemini (código 503). (This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.)
+B,I10,illegal,1,(recusa),(recusa),true,0,0,true,false,false,true,false,false,4822,
